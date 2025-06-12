@@ -1,0 +1,169 @@
+# Gumroad Bulk Signup Automation
+
+An automated tool for bulk email signups to Gumroad products using Puppeteer. This tool processes Excel or CSV files containing email addresses and automatically completes the signup process for each email.
+
+## Features
+
+- **Bulk Processing**: Handle hundreds of emails from Excel (.xlsx) or CSV files
+- **reCAPTCHA Handling**: Automatic reCAPTCHA detection and solving capabilities
+- **Batch Processing**: Process emails in configurable batches to avoid rate limiting
+- **Comprehensive Logging**: Detailed logs for successful and failed signups
+- **Error Recovery**: Screenshot capture for debugging failed attempts
+- **Flexible Configuration**: Customizable delays, batch sizes, and processing options
+
+## Prerequisites
+
+- Node.js (version 14 or higher)
+- npm or yarn package manager
+
+## Installation
+
+1. Clone or download this repository
+2. Install dependencies:
+   ```bash
+   npm install puppeteer xlsx
+   ```
+
+3. **Download and setup Buster extension** (Required for reCAPTCHA solving):
+   - Download the Buster extension from the [Chrome Web Store](https://chrome.google.com/webstore/detail/buster-captcha-solver-for/mpbjkejclgfgadiemmefgebjfooflfhl) or [Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/buster-captcha-solver/)
+   - Extract the extension files
+   - Place the contents in the `buster-extension/` folder in your project directory
+
+## Directory Structure
+
+```
+your-project/
+├── gumroad-bulk-signup.js
+├── buster-extension/          # Buster extension files go here
+├── logs/                      # Auto-created for log files
+├── emails.xlsx               # Your email file
+└── package.json
+```
+
+## Email File Format
+
+### Excel Format (.xlsx)
+The tool will automatically detect email columns with these names:
+- `email`, `Email`, `EMAIL`
+- `emails`, `Emails`, `EMAILS`
+
+Example:
+| Email |
+|-------|
+| user1@example.com |
+| user2@example.com |
+| user3@example.com |
+
+### CSV Format (.csv)
+Each line should contain at least one email address. The tool will extract the first valid email from each line.
+
+Example:
+```csv
+user1@example.com
+user2@example.com,John Doe
+user3@example.com,Jane Smith,Additional Info
+```
+
+## Usage
+
+### Basic Usage
+```bash
+node gumroad-bulk-signup.js emails.xlsx
+```
+
+### Advanced Usage with Options
+```bash
+node gumroad-bulk-signup.js emails.csv --headless --batch-size 1 --delay 5000
+```
+
+## Command Line Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--headless` | Run browser in headless mode (no GUI) | `false` |
+| `--delay <ms>` | Delay between actions in milliseconds | `3000` |
+| `--batch-size <num>` | Number of simultaneous signups | `2` |
+| `--batch-delay <ms>` | Delay between batches in milliseconds | `20000` |
+| `--buster-path <path>` | Path to Buster extension folder | `./buster-extension` |
+
+## Configuration
+
+### Product URL
+By default, the tool is configured for:
+```javascript
+productUrl: ''
+```
+
+To change the target product, modify the `productUrl` in the `GumroadBulkSignup` constructor.
+
+### Processing Settings
+- **Batch Size**: Controls how many emails are processed simultaneously
+- **Delays**: Prevents rate limiting and mimics human behavior
+- **Timeouts**: Configurable timeout periods for page loads and element waits
+
+## Logging
+
+The tool creates detailed logs in the `logs/` directory:
+
+- `signup_log.txt` - Complete activity log with timestamps
+- `successful_signups.txt` - List of successfully processed emails
+- `failed_signups.txt` - List of failed emails with error reasons
+- `debug_[timestamp]_error.png` - Screenshots of failed attempts
+
+## How It Works
+
+1. **Email Extraction**: Reads and validates emails from Excel/CSV files
+2. **Browser Automation**: Launches Chrome/Chromium with Puppeteer
+3. **Form Filling**: Navigates to product page and fills signup forms
+4. **reCAPTCHA Solving**: Automatically detects and attempts to solve reCAPTCHAs
+5. **Batch Processing**: Processes emails in configurable batches
+6. **Result Logging**: Records success/failure for each email
+
+## Troubleshooting
+
+### Common Issues
+
+**Extension Not Loading**
+- Ensure Buster extension files are in `buster-extension/` folder
+- Check console for extension loading messages
+
+**reCAPTCHA Failures**
+- The tool will wait 30 seconds for manual intervention
+- Consider reducing batch size to avoid triggering more CAPTCHAs
+- Ensure Buster extension is properly installed
+
+**Email File Not Found**
+- Verify the file path is correct
+- Ensure the file is in Excel (.xlsx) or CSV (.csv) format
+
+**Form Submission Failures**
+- The tool captures screenshots of failed attempts in `logs/`
+- Check if the target website has changed its form structure
+
+### Performance Optimization
+
+- Use `--headless` flag for faster processing
+- Adjust `--batch-size` based on your system capabilities
+- Increase `--batch-delay` if encountering rate limiting
+
+## Legal and Ethical Considerations
+
+⚠️ **Important**: This tool is for educational and legitimate use cases only. Ensure you have proper authorization before using this tool. Consider the following:
+
+- Respect website terms of service
+- Avoid overwhelming servers with excessive requests
+- Use appropriate delays between requests
+- Only use with email addresses you own or have permission to use
+- Be mindful of privacy and data protection regulations
+
+## Support
+
+For issues or questions:
+1. Check the log files for detailed error information
+2. Verify your email file format is correct
+3. Ensure all dependencies are properly installed
+4. Make sure the Buster extension is correctly placed
+
+## License
+
+This tool is provided as-is for educational purposes. Use responsibly and in accordance with applicable laws and website terms of service.

@@ -1,0 +1,25 @@
+# Node modules
+node_modules/
+
+# Logs
+logs/
+*.log
+signup_log.txt
+successful_signups.txt
+failed_signups.txt
+
+
+# Sensitive data
+emails.xlsx
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Ignore external Buster extension
+buster-extension/
+
+# Editor-specific files
+.vscode/
+.idea/
+*.swp
