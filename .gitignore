@@ -16,8 +16,11 @@ emails.xlsx
 .DS_Store
 Thumbs.db
 
-# Ignore external Buster extension
+# Ignore extensions
 buster-extension/
+nocaptcha-extension/
+
+
 
 # Editor-specific files
 .vscode/

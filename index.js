@@ -3,179 +3,432 @@ const xlsx = require('xlsx');
 const fs = require('fs');
 const path = require('path');
 
-class Logger {
-    constructor(logFile, successFile, failedFile) {
-        this.logFile = logFile;
-        this.successFile = successFile;
-        this.failedFile = failedFile;
-        this.initializeLogFiles();
+class GumroadBulkSignup {
+    constructor(options = {}) {
+        this.config = {
+            productUrl: 'https://brightlaunch.gumroad.com/l/livetraining',
+            actionDelay: options.delay || 3000,
+            headless: options.headless !== false,
+            timeout: options.timeout || 45000,
+
+            // CAPTCHA solver options
+            captchaSolver: options.captchaSolver || 'buster', // 'buster', 'nocaptcha', or 'manual'
+            busterExtensionPath: options.busterExtensionPath || './buster-extension',
+            nocaptchaExtensionPath: options.nocaptchaExtensionPath || './nocaptcha-extension',
+
+            // NoCaptcha AI specific configuration
+            nocaptchaApiKey: options.nocaptchaApiKey || null,
+            nocaptchaSettings: {
+                autoSolve: options.nocaptchaAutoSolve !== false,
+                maxWaitTime: options.nocaptchaMaxWait || 120000, // 2 minutes
+                retryAttempts: options.nocaptchaRetryAttempts || 3,
+                ...options.nocaptchaSettings
+            },
+
+            logFile: options.logFile || 'logs/signup_log.txt',
+            successFile: options.successFile || 'logs/successful_signups.txt',
+            failedFile: options.failedFile || 'logs/failed_signups.txt'
+        };
+
+        this.initializeLogging();
+        this.validateCaptchaSolver();
     }
 
-    initializeLogFiles() {
-        const timestamp = new Date().toISOString();
-        const logDir = path.dirname(this.logFile);
+    // Validate CAPTCHA solver configuration
+    validateCaptchaSolver() {
+        const validSolvers = ['buster', 'nocaptcha', 'manual'];
+        if (!validSolvers.includes(this.config.captchaSolver)) {
+            this.log(`Warning: Invalid CAPTCHA solver '${this.config.captchaSolver}'. Defaulting to 'buster'`);
+            this.config.captchaSolver = 'buster';
+        }
 
+        if (this.config.captchaSolver === 'nocaptcha') {
+            if (!this.config.nocaptchaApiKey) {
+                this.log('Warning: NoCaptcha AI requires an API key. Please provide nocaptchaApiKey in options.');
+                this.log('Falling back to manual CAPTCHA solving.');
+                this.config.captchaSolver = 'manual';
+            } else {
+                this.log('NoCaptcha AI configured with API key');
+            }
+        }
+
+        if (this.config.captchaSolver !== 'manual') {
+            const extensionPath = this.config.captchaSolver === 'buster'
+                ? this.config.busterExtensionPath
+                : this.config.nocaptchaExtensionPath;
+
+            if (!fs.existsSync(extensionPath)) {
+                this.log(`Warning: ${this.config.captchaSolver} extension not found at ${extensionPath}`);
+                this.log('Falling back to manual CAPTCHA solving.');
+                this.config.captchaSolver = 'manual';
+            } else {
+                this.log(`Using ${this.config.captchaSolver} CAPTCHA solver from: ${extensionPath}`);
+            }
+        }
+    }
+
+    // Initialize logging system
+    initializeLogging() {
+        const logDir = path.dirname(this.config.logFile);
         if (!fs.existsSync(logDir)) {
             fs.mkdirSync(logDir, { recursive: true });
         }
 
-        fs.writeFileSync(this.logFile, `=== Gumroad Bulk Signup Log - ${timestamp} ===\n`);
-        fs.writeFileSync(this.successFile, `=== Successful Signups - ${timestamp} ===\n`);
-        fs.writeFileSync(this.failedFile, `=== Failed Signups - ${timestamp} ===\n`);
+        const timestamp = new Date().toISOString();
+        const header = `=== Gumroad Bulk Signup - ${timestamp} ===\n`;
+
+        fs.writeFileSync(this.config.logFile, header);
+        fs.writeFileSync(this.config.successFile, header);
+        fs.writeFileSync(this.config.failedFile, header);
     }
 
+    // Logging methods
     log(message) {
         const timestamp = new Date().toLocaleString();
-        const logMessage = `[${timestamp}] ${message}\n`;
-        console.log(message);
-        fs.appendFileSync(this.logFile, logMessage);
+        const logMessage = `[${timestamp}] ${message}`;
+        console.log(logMessage);
+        fs.appendFileSync(this.config.logFile, `${logMessage}\n`);
     }
 
     logSuccess(email, details = '') {
         const message = `SUCCESS: ${email} ${details}`;
         this.log(message);
-        fs.appendFileSync(this.successFile, `${email}\n`);
+        fs.appendFileSync(this.config.successFile, `${email}\n`);
     }
 
     logFailure(email, error, details = '') {
         const message = `FAILED: ${email} - ${error} ${details}`;
         this.log(message);
-        fs.appendFileSync(this.failedFile, `${email} - ${error}\n`);
+        fs.appendFileSync(this.config.failedFile, `${email} - ${error}\n`);
     }
-}
 
-class EmailReader {
-    static readFromFile(filePath) {
+    // NoCaptcha configuration methods
+    async configureNoCaptchaExtension() {
+        if (this.config.captchaSolver !== 'nocaptcha' || !this.config.nocaptchaApiKey) {
+            return;
+        }
+
+        const configPath = path.join(this.config.nocaptchaExtensionPath, 'defaultConfig.json');
+
         try {
-            const ext = path.extname(filePath).toLowerCase();
+            this.log('Configuring NoCaptcha AI extension...');
 
-            if (ext === '.csv') {
-                return this.readFromCSV(filePath);
-            } else {
-                return this.readFromExcel(filePath);
+            // Check if config file exists
+            if (!fs.existsSync(configPath)) {
+                this.log(`Warning: NoCaptcha config file not found at ${configPath}`);
+                return;
+            }
+
+            // Read existing config
+            const configContent = fs.readFileSync(configPath, 'utf8');
+            const config = JSON.parse(configContent);
+
+            // Backup original config
+            const backupPath = configPath + '.backup';
+            if (!fs.existsSync(backupPath)) {
+                fs.writeFileSync(backupPath, configContent);
+                this.log('Created backup of original config');
+            }
+
+            // Update API key
+            config.APIKEY = this.config.nocaptchaApiKey;
+
+            // Ensure extension is enabled
+            config.enabled = true;
+            config.extensionEnabled = "true";
+
+            // Ensure ReCaptcha is configured properly
+            if (config.options && config.options.ReCaptcha) {
+                config.options.ReCaptcha.active = true;
+                config.options.ReCaptcha.autoSolve = true;
+                config.options.ReCaptcha.alwaysSolve = true;
+                config.options.ReCaptcha.support = true;
+            }
+
+            // Write updated config
+            fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+            this.log('NoCaptcha AI extension configured successfully');
+            this.log(`API key set: ${this.config.nocaptchaApiKey.substring(0, 8)}...`);
+
+        } catch (error) {
+            this.log(`Error configuring NoCaptcha extension: ${error.message}`);
+            throw error;
+        }
+    }
+
+    async restoreNoCaptchaConfig() {
+        if (this.config.captchaSolver !== 'nocaptcha') {
+            return;
+        }
+
+        const configPath = path.join(this.config.nocaptchaExtensionPath, 'defaultConfig.json');
+        const backupPath = configPath + '.backup';
+
+        try {
+            if (fs.existsSync(backupPath)) {
+                const backupContent = fs.readFileSync(backupPath, 'utf8');
+                fs.writeFileSync(configPath, backupContent);
+                this.log('Restored original NoCaptcha config');
             }
         } catch (error) {
-            console.error(`Error reading file ${filePath}: ${error.message}`);
+            this.log(`Warning: Could not restore original config: ${error.message}`);
+        }
+    }
+
+    // Email reading methods
+    readEmailsFromFile(filePath) {
+        try {
+            if (filePath.endsWith('.csv')) {
+                return this.readEmailsFromCSV(filePath);
+            }
+
+            const workbook = xlsx.readFile(filePath);
+            const sheetName = workbook.SheetNames[0];
+            const worksheet = workbook.Sheets[sheetName];
+            const data = xlsx.utils.sheet_to_json(worksheet);
+
+            const emailColumn = this.findEmailColumn(data);
+            const emails = data
+                .map(row => row[emailColumn])
+                .filter(email => email && email.includes('@'));
+
+            this.log(`Found ${emails.length} valid emails in ${filePath}`);
+            return emails;
+        } catch (error) {
+            this.log(`Error reading file ${filePath}: ${error.message}`);
             return [];
         }
     }
 
-    static readFromExcel(filePath) {
-        const workbook = xlsx.readFile(filePath);
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
-        const data = xlsx.utils.sheet_to_json(worksheet);
+    readEmailsFromCSV(filePath) {
+        try {
+            const content = fs.readFileSync(filePath, 'utf8');
+            const lines = content.split('\n').filter(line => line.trim());
+            const emails = [];
 
-        const emailColumns = ['email', 'Email', 'EMAIL', 'emails', 'Emails', 'EMAILS'];
-        let emailColumn = emailColumns.find(col =>
-            data.length > 0 && data[0].hasOwnProperty(col)
-        ) || Object.keys(data[0])[0];
+            for (const line of lines) {
+                const parts = line.split(',');
+                for (const part of parts) {
+                    const trimmed = part.trim().replace(/['"]/g, '');
+                    if (trimmed.includes('@')) {
+                        emails.push(trimmed);
+                        break;
+                    }
+                }
+            }
 
-        const emails = data
-            .map(row => row[emailColumn])
-            .filter(email => email && email.includes('@'));
-
-        console.log(`Found ${emails.length} valid emails in ${filePath}`);
-        return emails;
+            this.log(`Found ${emails.length} valid emails in CSV ${filePath}`);
+            return emails;
+        } catch (error) {
+            this.log(`Error reading CSV ${filePath}: ${error.message}`);
+            return [];
+        }
     }
 
-    static readFromCSV(filePath) {
-        const content = fs.readFileSync(filePath, 'utf8');
-        const lines = content.split('\n').filter(line => line.trim());
-        const emails = [];
+    findEmailColumn(data) {
+        if (!data.length) return null;
 
-        for (const line of lines) {
-            const parts = line.split(',');
-            for (const part of parts) {
-                const trimmed = part.trim().replace(/['"]/g, '');
-                if (trimmed.includes('@')) {
-                    emails.push(trimmed);
-                    break;
-                }
+        const emailColumns = ['email', 'Email', 'EMAIL', 'emails', 'Emails', 'EMAILS'];
+
+        for (const col of emailColumns) {
+            if (data[0].hasOwnProperty(col)) {
+                return col;
             }
         }
 
-        console.log(`Found ${emails.length} valid emails in CSV ${filePath}`);
-        return emails;
-    }
-}
-
-class RecaptchaSolver {
-    constructor(logger) {
-        this.logger = logger;
-        this.timeout = 45000;
-        this.recaptchaSelectors = [
-            'iframe[src*="recaptcha"]',
-            'iframe[name^="a-"][src^="https://www.google.com/recaptcha"]',
-            '.g-recaptcha',
-            '#recaptcha',
-            '[data-sitekey]',
-            '.recaptcha-checkbox-border',
-            '.rc-anchor'
-        ];
+        const firstColumn = Object.keys(data[0])[0];
+        this.log(`Warning: No standard email column found. Using: ${firstColumn}`);
+        return firstColumn;
     }
 
-    async solve(page) {
+    // Utility methods
+    async sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    async waitForElement(page, selector, timeout = this.config.timeout) {
         try {
-            this.logger.log('Checking for reCAPTCHA...');
-            await this.sleep(2000);
-
-            const recaptchaFrame = await this.findRecaptchaFrame(page);
-            if (!recaptchaFrame) {
-                this.logger.log('No reCAPTCHA detected');
-                return true;
-            }
-
-            this.logger.log('reCAPTCHA found, attempting to solve...');
-
-            const checkboxClicked = await this.clickCheckbox(recaptchaFrame);
-            if (!checkboxClicked) {
-                throw new Error('Could not click reCAPTCHA checkbox');
-            }
-
-            await this.sleep(5000);
-
-            const isVerified = await this.checkVerification(recaptchaFrame);
-            if (isVerified) {
-                this.logger.log('reCAPTCHA verified automatically');
-                return true;
-            }
-
-            const challengeFrame = await this.findChallengeFrame(page);
-            if (challengeFrame) {
-                this.logger.log('Challenge detected, attempting to solve...');
-                await this.solveChallenge(challengeFrame);
-            }
-
+            await page.waitForSelector(selector, { timeout, visible: true });
             return true;
-
-        } catch (error) {
-            this.logger.log(`reCAPTCHA handling failed: ${error.message}`);
-            this.logger.log('Waiting for manual intervention...');
-            await this.sleep(30000);
+        } catch {
             return false;
         }
     }
 
-    async findRecaptchaFrame(page) {
-        const frames = await page.frames();
-        return frames.find(frame => {
-            const url = frame.url();
-            return url.includes('recaptcha') &&
-                (url.includes('anchor') || url.includes('checkbox'));
+    // Browser setup
+    async createBrowser() {
+        // Configure NoCaptcha extension before launching browser
+        await this.configureNoCaptchaExtension();
+
+        const args = [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-web-security',
+            '--disable-blink-features=AutomationControlled',
+            '--no-first-run',
+            '--disable-default-apps',
+            '--disable-extensions-file-access-check',
+            '--enable-extension-activity-logging',
+            '--disable-background-timer-throttling',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-renderer-backgrounding',
+            '--allow-running-insecure-content'
+        ];
+
+        // Add appropriate CAPTCHA solver extension
+        if (this.config.captchaSolver !== 'manual') {
+            const extensionPath = this.config.captchaSolver === 'buster'
+                ? this.config.busterExtensionPath
+                : this.config.nocaptchaExtensionPath;
+
+            if (fs.existsSync(extensionPath)) {
+                const resolvedPath = path.resolve(extensionPath);
+                args.push(`--disable-extensions-except=${resolvedPath}`);
+                args.push(`--load-extension=${resolvedPath}`);
+                this.log(`${this.config.captchaSolver} extension loaded from: ${resolvedPath}`);
+            }
+        }
+
+        const browser = await puppeteer.launch({
+            headless: this.config.headless,
+            args,
+            defaultViewport: { width: 1366, height: 768 }
+        });
+
+        return browser;
+    }
+
+    async setupPage(page) {
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        await page.setViewport({ width: 1366, height: 768 });
+
+        // Remove webdriver detection
+        await page.evaluateOnNewDocument(() => {
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined,
+            });
         });
     }
 
-    async findChallengeFrame(page) {
-        const frames = await page.frames();
-        return frames.find(frame => {
-            const url = frame.url();
-            return url.includes('recaptcha') &&
-                (url.includes('bframe') || url.includes('challenge'));
-        });
+    // CAPTCHA handling
+    async handleRecaptcha(page) {
+        try {
+            this.log('Checking for reCAPTCHA...');
+            await this.sleep(2000);
+
+            const recaptchaSelectors = [
+                'iframe[src*="recaptcha"]',
+                'iframe[name^="a-"][src^="https://www.google.com/recaptcha"]',
+                '.g-recaptcha',
+                '.rc-anchor'
+            ];
+
+            const recaptchaFound = await this.detectRecaptcha(page, recaptchaSelectors);
+            if (!recaptchaFound) {
+                this.log('No reCAPTCHA detected');
+                return true;
+            }
+
+            return await this.solveRecaptcha(page);
+        } catch (error) {
+            this.log(`reCAPTCHA handling failed: ${error.message}`);
+            if (this.config.captchaSolver === 'manual') {
+                this.log('Manual CAPTCHA solving required. Waiting 60 seconds...');
+                await this.sleep(60000);
+                return true;
+            }
+            return false;
+        }
     }
 
-    async clickCheckbox(recaptchaFrame) {
+    async detectRecaptcha(page, selectors) {
+        for (const selector of selectors) {
+            try {
+                const element = await page.$(selector);
+                if (element) {
+                    const isVisible = await element.evaluate(el => {
+                        const style = window.getComputedStyle(el);
+                        return style.display !== 'none' &&
+                            style.visibility !== 'hidden' &&
+                            el.offsetHeight > 0;
+                    });
+
+                    if (isVisible) {
+                        this.log(`reCAPTCHA detected with selector: ${selector}`);
+                        return true;
+                    }
+                }
+            } catch {
+                continue;
+            }
+        }
+        return false;
+    }
+
+    async solveRecaptcha(page) {
+        this.log(`reCAPTCHA found, attempting to solve with ${this.config.captchaSolver}...`);
+        await this.sleep(3000);
+
+        const frames = await page.frames();
+        const recaptchaFrame = frames.find(frame => {
+            const url = frame.url();
+            return url.includes('recaptcha') && (url.includes('anchor') || url.includes('checkbox'));
+        });
+
+        if (!recaptchaFrame) {
+            throw new Error('Could not find reCAPTCHA frame');
+        }
+
+        // Click checkbox
+        const checkboxClicked = await this.clickRecaptchaCheckbox(recaptchaFrame);
+        if (!checkboxClicked) {
+            throw new Error('Could not click reCAPTCHA checkbox');
+        }
+
+        await this.sleep(5000);
+
+        // Check if verified
+        const isVerified = await this.checkRecaptchaVerified(recaptchaFrame);
+        if (isVerified) {
+            this.log('reCAPTCHA verified automatically');
+            return true;
+        }
+
+        // Handle challenge if present
+        const challengeFrame = frames.find(frame => {
+            const url = frame.url();
+            return url.includes('recaptcha') && (url.includes('bframe') || url.includes('challenge'));
+        });
+
+        if (challengeFrame) {
+            this.log(`Challenge detected, attempting to solve with ${this.config.captchaSolver}...`);
+
+            let solved = false;
+            switch (this.config.captchaSolver) {
+                case 'buster':
+                    solved = await this.solveCaptchaWithBuster(challengeFrame);
+                    break;
+                case 'nocaptcha':
+                    solved = await this.solveCaptchaWithNoCaptcha(challengeFrame, page);
+                    break;
+                case 'manual':
+                    this.log('Manual solving required. Please solve the CAPTCHA manually.');
+                    await this.sleep(60000); // Wait 60 seconds for manual solving
+                    solved = true;
+                    break;
+            }
+
+            if (solved) {
+                await this.sleep(3000);
+                return await this.checkRecaptchaVerified(recaptchaFrame);
+            }
+        }
+
+        return true;
+    }
+
+    async clickRecaptchaCheckbox(frame) {
         const checkboxSelectors = [
             '.recaptcha-checkbox-border',
             '.rc-anchor-checkbox',
@@ -185,21 +438,18 @@ class RecaptchaSolver {
 
         for (const selector of checkboxSelectors) {
             try {
-                await recaptchaFrame.waitForSelector(selector, {
-                    timeout: 10000,
-                    visible: true
-                });
-                await recaptchaFrame.click(selector);
-                this.logger.log(`Checkbox clicked using selector: ${selector}`);
+                await frame.waitForSelector(selector, { timeout: 10000, visible: true });
+                await frame.click(selector);
+                this.log(`Checkbox clicked using selector: ${selector}`);
                 return true;
-            } catch (e) {
+            } catch {
                 continue;
             }
         }
         return false;
     }
 
-    async checkVerification(recaptchaFrame) {
+    async checkRecaptchaVerified(frame) {
         const verificationSelectors = [
             '.recaptcha-checkbox-checked',
             '.rc-anchor-checkbox-checked',
@@ -208,443 +458,414 @@ class RecaptchaSolver {
 
         for (const selector of verificationSelectors) {
             try {
-                const element = await recaptchaFrame.$(selector);
+                const element = await frame.$(selector);
                 if (element) {
-                    this.logger.log('reCAPTCHA verification confirmed');
+                    this.log('reCAPTCHA verification confirmed');
                     return true;
                 }
-            } catch (e) {
+            } catch {
                 continue;
             }
         }
         return false;
     }
 
-    async solveChallenge(challengeFrame) {
+    // Buster CAPTCHA solver
+    async solveCaptchaWithBuster(challengeFrame) {
         try {
-            await challengeFrame.waitForSelector(
-                '.rc-imageselect-instructions, .rc-audiochallenge-instructions, .rc-footer',
-                { timeout: 10000 }
-            );
-            await this.sleep(2000);
+            this.log('Waiting for Buster extension...');
+            await challengeFrame.waitForSelector('.rc-footer', { timeout: 15000 });
 
-            const audioSwitched = await this.switchToAudioChallenge(challengeFrame);
-            if (audioSwitched) {
-                await this.solveAudioChallenge(challengeFrame);
+            // Wait for Buster to inject solver button
+            const solverButton = await this.waitForBusterButton(challengeFrame);
+
+            if (solverButton) {
+                await solverButton.click();
+                this.log('Clicked Buster button');
+                await this.sleep(25000); // Wait for Buster to solve
+                return await this.verifyChallengeSolution(challengeFrame);
             }
 
-            await this.submitChallenge(challengeFrame);
+            return false;
         } catch (error) {
-            this.logger.log(`Challenge solving error: ${error.message}`);
+            this.log(`Buster solving error: ${error.message}`);
+            return false;
         }
     }
 
-    async switchToAudioChallenge(challengeFrame) {
-        const audioButtonSelectors = [
-            '#recaptcha-audio-button',
-            '.rc-button-audio',
-            'button[title="Get an audio challenge"]'
-        ];
+    async waitForBusterButton(challengeFrame, maxAttempts = 10) {
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            await this.sleep(5000);
 
-        for (const selector of audioButtonSelectors) {
             try {
-                const audioButton = await challengeFrame.$(selector);
-                if (audioButton) {
-                    const isClickable = await audioButton.evaluate(el => {
+                const solverButton = await challengeFrame.$('#solver-button');
+                if (solverButton) {
+                    const isVisible = await solverButton.evaluate(el => {
                         const style = window.getComputedStyle(el);
-                        return style.display !== 'none' &&
-                            style.visibility !== 'hidden' &&
-                            !el.disabled;
+                        return style.display !== 'none' && el.offsetHeight > 0;
                     });
 
-                    if (isClickable) {
-                        await challengeFrame.click(selector);
-                        this.logger.log('Switched to audio challenge');
-                        await this.sleep(3000);
-                        return true;
+                    if (isVisible) {
+                        this.log(`Solver button found after ${attempt} attempts`);
+                        return solverButton;
                     }
                 }
-            } catch (e) {
-                continue;
+            } catch {
+                // Continue waiting
             }
+
+            this.log(`Attempt ${attempt}/${maxAttempts}: Waiting for solver button...`);
         }
-        return false;
+
+        this.log('Solver button not found after waiting');
+        return null;
     }
 
-    async solveAudioChallenge(challengeFrame) {
-        this.logger.log('Attempting to solve audio challenge...');
-        await this.sleep(15000); // Wait for potential Buster extension
+    // Simplified NoCaptcha AI solver
+    async solveCaptchaWithNoCaptcha(challengeFrame, page) {
+        try {
+            this.log('NoCaptcha AI should auto-solve the challenge...');
+
+            // Since we configured the extension to auto-solve, just wait for it to work
+            const maxWaitTime = this.config.nocaptchaSettings.maxWaitTime;
+            const startTime = Date.now();
+            let attempts = 0;
+            const maxAttempts = this.config.nocaptchaSettings.retryAttempts;
+
+            while (attempts < maxAttempts && (Date.now() - startTime) < maxWaitTime) {
+                attempts++;
+                this.log(`Waiting for NoCaptcha AI to solve... (${attempts}/${maxAttempts})`);
+
+                // Wait for some time before checking
+                await this.sleep(10000);
+
+                // Check if solved
+                const isSolved = await this.checkNoCaptchaSolved(challengeFrame, page);
+                if (isSolved) {
+                    this.log('NoCaptcha AI successfully solved the challenge');
+                    return await this.verifyChallengeSolution(challengeFrame);
+                }
+            }
+
+            this.log('NoCaptcha AI solving timed out');
+            return false;
+
+        } catch (error) {
+            this.log(`NoCaptcha AI solving error: ${error.message}`);
+            return false;
+        }
     }
 
-    async submitChallenge(challengeFrame) {
-        const verifySelectors = [
-            '#recaptcha-verify-button',
-            '.rc-button-default',
-            'button[title="Verify"]'
-        ];
+    async checkNoCaptchaSolved(challengeFrame, page) {
+        try {
+            // Check if challenge frame is gone (solved)
+            const challengeFrames = await page.frames();
+            const activeChallenge = challengeFrames.find(frame => {
+                const url = frame.url();
+                return url.includes('recaptcha') && url.includes('bframe');
+            });
 
-        for (const selector of verifySelectors) {
-            try {
-                const verifyButton = await challengeFrame.$(selector);
-                if (verifyButton) {
-                    await challengeFrame.click(selector);
-                    this.logger.log(`Clicked verify button: ${selector}`);
+            if (!activeChallenge) {
+                return true;
+            }
+
+            // Check for solved indicators in the challenge frame
+            const solvedIndicators = [
+                '.rc-anchor-checkbox-checked',
+                '[aria-checked="true"]',
+                '.recaptcha-checkbox-checked'
+            ];
+
+            for (const selector of solvedIndicators) {
+                try {
+                    const element = await challengeFrame.$(selector);
+                    if (element) {
+                        return true;
+                    }
+                } catch {
+                    continue;
+                }
+            }
+
+            return false;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    async verifyChallengeSolution(challengeFrame) {
+        try {
+            await this.sleep(3000);
+
+            const verifyButton = await challengeFrame.$('#recaptcha-verify-button');
+            if (verifyButton) {
+                const buttonText = await verifyButton.evaluate(el => el.textContent?.trim());
+                const isEnabled = await verifyButton.evaluate(el => !el.disabled);
+
+                if (buttonText !== 'Skip' || isEnabled) {
+                    await verifyButton.click();
+                    this.log('Clicked verify button');
                     await this.sleep(3000);
                     return true;
                 }
-            } catch (e) {
-                continue;
             }
+            return true;
+        } catch (error) {
+            this.log(`Verify check failed: ${error.message}`);
+            return false;
         }
-        return false;
     }
 
-    async sleep(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
-    }
-}
+    // Form handling methods
+    async fillProductForm(page, email) {
+        // Enter price (0)
+        await this.setPrice(page, '0');
+        await this.sleep(1000);
 
-class FormHandler {
-    constructor(logger, config) {
-        this.logger = logger;
-        this.config = config;
-        this.fakeNames = ['John Smith', 'Jane Doe', 'Mike Johnson', 'Sarah Wilson', 'David Brown'];
+        // Click "I want this!" button
+        const iwantThisClicked = await this.clickIWantThisButton(page);
+        if (!iwantThisClicked) {
+            throw new Error('Could not find "I want this!" button');
+        }
+
+        // Wait for checkout page
+        this.log('Waiting for checkout page...');
+        await this.sleep(5000);
+
+        // Fill email
+        await this.fillEmail(page, email);
+        await this.sleep(2000);
+
+        // Set tip to 0
+        await this.setTip(page, '0');
     }
 
-    async fillPriceField(page) {
+    async setPrice(page, price) {
         const priceInput = await page.$('input[inputMode="decimal"]');
         if (priceInput) {
             await priceInput.focus();
             await priceInput.click({ clickCount: 3 });
-            await priceInput.type('0');
-            this.logger.log('Entered price: 0');
-            return true;
+            await priceInput.type(price);
+            this.log(`Set price to: ${price}`);
+        } else {
+            this.log('Warning: Could not find price input field');
         }
-        this.logger.log('Warning: Could not find price input field');
-        return false;
     }
 
-    async clickWantThisButton(page) {
+    async clickIWantThisButton(page) {
         const buttonSelectors = [
             'a[href*="checkout"]',
-            '.accent.button',
-            'button:has-text("I want this!")'
+            '.accent.button'
         ];
 
         for (const selector of buttonSelectors) {
             try {
-                const actualSelector = selector.replace(':has-text("I want this!")', '');
-                const elements = await page.$$(actualSelector);
-
+                const elements = await page.$$(selector);
                 for (const element of elements) {
-                    const text = await page.evaluate(el => el.textContent, element);
+                    const text = await element.evaluate(el => el.textContent);
                     const isVisible = await element.isIntersectingViewport();
 
-                    if (isVisible && (text.includes('I want this') || selector.includes('checkout'))) {
+                    if (isVisible && text.includes('I want this')) {
                         await element.click();
-                        this.logger.log(`Clicked "I want this!" button`);
+                        this.log('Clicked "I want this!" button');
                         return true;
                     }
                 }
-            } catch (e) {
+            } catch {
                 continue;
             }
         }
         return false;
     }
 
-    async fillEmailField(page, email) {
+    async fillEmail(page, email) {
         const emailSelectors = [
             'input[type="email"]',
             'input[name="email"]',
-            'input[placeholder*="email" i]',
-            'input[autocomplete="email"]'
+            'input[placeholder*="email" i]'
         ];
 
         for (const selector of emailSelectors) {
             try {
-                await page.waitForSelector(selector, { timeout: 10000, visible: true });
-                const emailInput = await page.$(selector);
-                await emailInput.focus();
-                await emailInput.click({ clickCount: 3 });
-                await emailInput.type(email);
-                this.logger.log(`Entered email using selector: ${selector}`);
-                return true;
-            } catch (e) {
+                if (await this.waitForElement(page, selector, 10000)) {
+                    const emailInput = await page.$(selector);
+                    await emailInput.focus();
+                    await emailInput.click({ clickCount: 3 });
+                    await emailInput.type(email);
+                    this.log('Email entered successfully');
+                    return true;
+                }
+            } catch {
                 continue;
             }
         }
-        return false;
+        throw new Error('Could not find email input field');
     }
 
-    async setTipToZero(page) {
+    async setTip(page, amount) {
         const tipInput = await page.$('input[aria-label="Tip"]');
         if (tipInput) {
             await tipInput.focus();
             await tipInput.click({ clickCount: 3 });
-            await tipInput.type('0');
-            this.logger.log('Set tip to 0');
-            return true;
-        }
-        this.logger.log('Warning: Could not find tip field');
-        return false;
-    }
-
-    async fillRequiredFields(page) {
-        const fakeName = this.fakeNames[Math.floor(Math.random() * this.fakeNames.length)];
-
-        // Fill name fields
-        const nameSelectors = [
-            'input[name*="name" i]',
-            'input[placeholder*="name" i]',
-            '#name, #first_name, #last_name'
-        ];
-
-        for (const selector of nameSelectors) {
-            try {
-                const nameInput = await page.$(selector);
-                if (nameInput) {
-                    await nameInput.focus();
-                    await nameInput.type(fakeName);
-                    await this.sleep(500);
-                }
-            } catch (e) {
-                continue;
-            }
-        }
-
-        // Fill country if present
-        try {
-            const countrySelect = await page.$('select[name*="country" i], #country');
-            if (countrySelect) {
-                await countrySelect.select('US');
-            }
-        } catch (e) {
-            // Continue if country field not found
+            await tipInput.type(amount);
+            this.log(`Set tip to: ${amount}`);
+        } else {
+            this.log('Warning: Could not find tip field');
         }
     }
 
     async submitForm(page) {
         const submitSelectors = [
-            'button:has-text("Get")',
-            'button:has-text("Complete")',
-            'button:has-text("Purchase")',
             'button[type="submit"]',
-            'input[type="submit"]'
+            'input[type="submit"]',
+            '.submit-button'
         ];
 
-        for (const selector of submitSelectors) {
+        // Try specific buttons with text
+        const buttons = await page.$$('button');
+        for (const button of buttons) {
             try {
-                const actualSelector = selector.replace(/:has-text\("[^"]*"\)/, '');
+                const text = await button.evaluate(el => el.textContent);
+                const isVisible = await button.isIntersectingViewport();
+                const isEnabled = await button.evaluate(el => !el.disabled);
 
-                if (actualSelector === 'button') {
-                    const buttons = await page.$$('button');
-                    for (const button of buttons) {
-                        const text = await page.evaluate(el => el.textContent, button);
-                        const isVisible = await button.isIntersectingViewport();
-                        const isEnabled = await page.evaluate(el => !el.disabled, button);
-
-                        if (isVisible && isEnabled && this.isSubmitButtonText(text)) {
-                            await button.click();
-                            this.logger.log(`Submitted form using button: ${text.trim()}`);
-                            return true;
-                        }
-                    }
-                } else {
-                    const element = await page.$(actualSelector);
-                    if (element) {
-                        const isEnabled = await page.evaluate(el => !el.disabled, element);
-                        if (isEnabled) {
-                            await element.click();
-                            this.logger.log(`Submitted form using selector: ${actualSelector}`);
-                            return true;
-                        }
-                    }
+                if (isVisible && isEnabled && this.isSubmitButtonText(text)) {
+                    await button.click();
+                    this.log(`Form submitted using button: ${text.trim()}`);
+                    return true;
                 }
-            } catch (e) {
+            } catch {
                 continue;
             }
         }
+
+        // Try selector-based approach
+        for (const selector of submitSelectors) {
+            try {
+                if (await this.waitForElement(page, selector, 5000)) {
+                    const submitBtn = await page.$(selector);
+                    const isEnabled = await submitBtn.evaluate(el => !el.disabled);
+
+                    if (isEnabled) {
+                        await submitBtn.click();
+                        this.log(`Form submitted using: ${selector}`);
+                        return true;
+                    }
+                }
+            } catch {
+                continue;
+            }
+        }
+
         return false;
     }
 
     isSubmitButtonText(text) {
-        const submitKeywords = ['get', 'complete', 'purchase', 'checkout', 'submit'];
-        return submitKeywords.some(keyword =>
-            text.toLowerCase().includes(keyword)
+        const submitTexts = ['get', 'complete', 'purchase', 'checkout', 'submit'];
+        return submitTexts.some(submitText =>
+            text.toLowerCase().includes(submitText)
         );
     }
 
     async checkForSuccess(page) {
         const currentUrl = page.url();
-        const pageContent = await page.evaluate(() =>
-            document.body.innerText.toLowerCase()
-        );
+        const pageContent = await page.evaluate(() => document.body.innerText.toLowerCase());
 
         const successIndicators = [
             'success', 'complete', 'thank', 'confirmation',
-            'download', 'purchased', 'receipt', 'order'
+            'download', 'purchased', 'receipt', 'congratulations'
         ];
 
         const errorIndicators = [
             'error', 'failed', 'invalid', 'try again', 'problem'
         ];
 
+        // Check for errors first
         const hasError = errorIndicators.some(indicator =>
             currentUrl.includes(indicator) || pageContent.includes(indicator)
         );
 
         if (hasError) {
-            this.logger.log('Error detected in page content or URL');
+            this.log('Error detected in page content');
             return false;
         }
 
+        // Check for success
         const isSuccess = successIndicators.some(indicator =>
             currentUrl.includes(indicator) || pageContent.includes(indicator)
         );
 
+        this.log(`Current URL: ${currentUrl}`);
         return isSuccess;
     }
 
-    async sleep(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
-    }
-}
-
-class GumroadBulkSignup {
-    constructor(options = {}) {
-        this.config = {
-            productUrl: 'https://brightlaunch.gumroad.com/l/livetraining',
-            actionDelay: options.delay || 3000,
-            headless: options.headless !== undefined ? options.headless : false,
-            timeout: options.timeout || 45000,
-            busterExtensionPath: options.busterExtensionPath || './buster-extension'
-        };
-
-        this.logger = new Logger(
-            options.logFile || 'logs/signup_log.txt',
-            options.successFile || 'logs/successful_signups.txt',
-            options.failedFile || 'logs/failed_signups.txt'
-        );
-
-        this.recaptchaSolver = new RecaptchaSolver(this.logger);
-        this.formHandler = new FormHandler(this.logger, this.config);
-    }
-
-    async createBrowser() {
-        const browserArgs = [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-web-security',
-            '--disable-blink-features=AutomationControlled',
-            '--no-first-run',
-            '--disable-default-apps'
-        ];
-
-        if (fs.existsSync(this.config.busterExtensionPath)) {
-            const extensionPath = path.resolve(this.config.busterExtensionPath);
-            browserArgs.push(`--disable-extensions-except=${extensionPath}`);
-            browserArgs.push(`--load-extension=${extensionPath}`);
-            this.logger.log('Buster extension loaded from: ' + extensionPath);
-        } else {
-            this.logger.log('Warning: Buster extension not found at ' + this.config.busterExtensionPath);
-        }
-
-        return await puppeteer.launch({
-            headless: this.config.headless,
-            args: browserArgs,
-            defaultViewport: { width: 1366, height: 768 }
-        });
-    }
-
+    // Main signup method
     async signupSingleEmail(page, email) {
         try {
-            this.logger.log(`Starting signup for: ${email}`);
+            this.log(`Starting signup for: ${email}`);
 
             // Navigate to product page
             await page.goto(this.config.productUrl, {
                 waitUntil: 'networkidle2',
                 timeout: this.config.timeout
             });
+
             await this.sleep(this.config.actionDelay);
 
-            // Fill form steps
-            await this.formHandler.fillPriceField(page);
-            await this.sleep(1000);
-
-            if (!await this.formHandler.clickWantThisButton(page)) {
-                throw new Error('Could not find "I want this!" button');
-            }
-
-            // Wait for checkout page
-            this.logger.log('Waiting for checkout page to load...');
-            await this.sleep(5000);
-
-            if (!await this.formHandler.fillEmailField(page, email)) {
-                throw new Error('Could not find email input field');
-            }
-
-            await this.sleep(9000);
-            await this.formHandler.setTipToZero(page);
-            await this.formHandler.fillRequiredFields(page);
+            // Fill form
+            await this.fillProductForm(page, email);
 
             // Submit form
             await this.sleep(2000);
-            if (!await this.formHandler.submitForm(page)) {
+            const submitResult = await this.submitForm(page);
+            if (!submitResult) {
                 throw new Error('Could not submit form');
             }
 
-            // Handle reCAPTCHA after submission
-            this.logger.log('Checking for post-submission reCAPTCHA...');
-            await this.recaptchaSolver.solve(page);
+            // Handle any CAPTCHA
+            await this.handleRecaptcha(page);
 
             // Check for success
             await this.sleep(8000);
-            const success = await this.formHandler.checkForSuccess(page);
+            const success = await this.checkForSuccess(page);
 
             if (success) {
-                this.logger.logSuccess(email, '- Signup completed successfully');
+                this.logSuccess(email, `- Signup completed successfully using ${this.config.captchaSolver}`);
                 return true;
             } else {
                 throw new Error('No success confirmation found');
             }
 
         } catch (error) {
-            await page.screenshot({
-                path: `logs/debug_${Date.now()}_error.png`
-            });
-            this.logger.logFailure(email, error.message);
+            this.logFailure(email, error.message);
             return false;
         }
     }
-
+    // Bulk signup method
     async bulkSignup(emailSourcePath, options = {}) {
         const batchSize = options.batchSize || 2;
         const batchDelay = options.batchDelay || 20000;
 
-        const emails = EmailReader.readFromFile(emailSourcePath);
-
+        const emails = this.readEmailsFromFile(emailSourcePath);
         if (emails.length === 0) {
-            this.logger.log('No emails found to process');
+            this.log('No emails found to process');
             return;
         }
 
-        this.logger.log(`Starting bulk signup for ${emails.length} emails`);
+        this.log(`Starting bulk signup for ${emails.length} emails using ${this.config.captchaSolver} CAPTCHA solver`);
 
         const browser = await this.createBrowser();
+        let successCount = 0;
+        let failureCount = 0;
 
         try {
-            let successCount = 0;
-            let failureCount = 0;
-
             for (let i = 0; i < emails.length; i += batchSize) {
                 const batch = emails.slice(i, i + batchSize);
-                this.logger.log(`Processing batch ${Math.floor(i / batchSize) + 1}: ${batch.length} emails`);
+                this.log(`Processing batch ${Math.floor(i / batchSize) + 1}: ${batch.length} emails`);
 
                 const promises = batch.map(async (email) => {
                     const page = await browser.newPage();
-                    await this.configurePage(page);
+                    await this.setupPage(page);
 
                     try {
                         const result = await this.signupSingleEmail(page, email);
@@ -658,34 +879,19 @@ class GumroadBulkSignup {
 
                 await Promise.allSettled(promises);
 
-                this.logger.log(`Batch completed. Running totals: ${successCount} successful, ${failureCount} failed`);
+                this.log(`Batch completed. Totals: ${successCount} successful, ${failureCount} failed`);
 
                 if (i + batchSize < emails.length) {
-                    this.logger.log(`Waiting ${batchDelay / 1000} seconds before next batch...`);
+                    this.log(`Waiting ${batchDelay / 1000} seconds before next batch...`);
                     await this.sleep(batchDelay);
                 }
             }
 
-            this.logger.log(`Final results: ${successCount} successful signups, ${failureCount} failures out of ${emails.length} total emails`);
+            this.log(`Final results: ${successCount} successful, ${failureCount} failed out of ${emails.length} total`);
 
         } finally {
             await browser.close();
         }
-    }
-
-    async configurePage(page) {
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-        await page.setViewport({ width: 1366, height: 768 });
-
-        await page.evaluateOnNewDocument(() => {
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined,
-            });
-        });
-    }
-
-    async sleep(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
     }
 }
 
@@ -698,44 +904,52 @@ async function main() {
 Usage: node gumroad-bulk-signup.js <email-file> [options]
 
 Arguments:
-  email-file    Path to Excel (.xlsx) or CSV file containing emails
+  email-file              Path to Excel (.xlsx) or CSV file containing emails
 
 Options:
-  --headless              Run in headless mode (default: false)
+  --headless             Run in headless mode (default: true)
   --delay <ms>           Delay between actions in ms (default: 3000)
   --batch-size <num>     Number of simultaneous signups (default: 2)
   --batch-delay <ms>     Delay between batches in ms (default: 20000)
+  --captcha-solver <type> CAPTCHA solver: 'buster' or 'nocaptcha' (default: buster)
   --buster-path <path>   Path to Buster extension (default: ./buster-extension)
+  --nocaptcha-path <path> Path to NoCaptcha AI extension (default: ./nocaptcha-extension)
+  --nocaptcha-api-key <key> API key for NoCaptcha AI solver
 
 Examples:
-  node gumroad-bulk-signup.js emails.xlsx
-  node gumroad-bulk-signup.js emails.csv --headless --batch-size 1
+  node index.js emails.xlsx
+  node index.js emails.csv --captcha-solver nocaptcha
+  node index.js emails.xlsx --captcha-solver buster --batch-size 1
+  node index.js emails.xlsx --nocaptcha-path ./my-nocaptcha-extension
         `);
         return;
     }
 
     const emailFile = args[0];
+    if (!fs.existsSync(emailFile)) {
+        console.error(`Error: File ${emailFile} not found`);
+        return;
+    }
 
+    // Parse arguments
     const getArgValue = (argName) => {
         const index = args.indexOf(argName);
         return index !== -1 && args[index + 1] ? args[index + 1] : null;
     };
 
     const options = {
-        headless: args.includes('--headless'),
+        headless: !args.includes('--no-headless'),
         delay: parseInt(getArgValue('--delay')) || 3000,
-        busterExtensionPath: getArgValue('--buster-path') || './buster-extension'
+        captchaSolver: getArgValue('--captcha-solver') || 'buster',
+        busterExtensionPath: getArgValue('--buster-path') || './buster-extension',
+        nocaptchaExtensionPath: getArgValue('--nocaptcha-path') || './nocaptcha-extension',
+        nocaptchaApiKey: getArgValue('--nocaptcha-api-key')
     };
 
     const bulkOptions = {
         batchSize: parseInt(getArgValue('--batch-size')) || 2,
         batchDelay: parseInt(getArgValue('--batch-delay')) || 20000
     };
-
-    if (!fs.existsSync(emailFile)) {
-        console.error(`Error: File ${emailFile} not found`);
-        return;
-    }
 
     const signup = new GumroadBulkSignup(options);
     await signup.bulkSignup(emailFile, bulkOptions);
