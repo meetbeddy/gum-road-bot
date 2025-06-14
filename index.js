@@ -5,84 +5,58 @@ const path = require('path');
 
 class GumroadBulkSignup {
     constructor(options = {}) {
-        this.config = {
-            productUrl: 'https://brightlaunch.gumroad.com/l/livetraining',
-            actionDelay: options.delay || 3000,
-            headless: options.headless !== false,
-            timeout: options.timeout || 45000,
-
-            // CAPTCHA solver options
-            captchaSolver: options.captchaSolver || 'buster', // 'buster', 'nocaptcha', or 'manual'
-            busterExtensionPath: options.busterExtensionPath || './buster-extension',
-            nocaptchaExtensionPath: options.nocaptchaExtensionPath || './nocaptcha-extension',
-
-            // NoCaptcha AI specific configuration
-            nocaptchaApiKey: options.nocaptchaApiKey || null,
-            nocaptchaSettings: {
-                autoSolve: options.nocaptchaAutoSolve !== false,
-                maxWaitTime: options.nocaptchaMaxWait || 120000, // 2 minutes
-                retryAttempts: options.nocaptchaRetryAttempts || 3,
-                ...options.nocaptchaSettings
-            },
-
-            logFile: options.logFile || 'logs/signup_log.txt',
-            successFile: options.successFile || 'logs/successful_signups.txt',
-            failedFile: options.failedFile || 'logs/failed_signups.txt'
-        };
-
+        this.config = this.initializeConfig(options);
         this.initializeLogging();
         this.validateCaptchaSolver();
     }
 
-    // Validate CAPTCHA solver configuration
-    validateCaptchaSolver() {
-        const validSolvers = ['buster', 'nocaptcha', 'manual'];
-        if (!validSolvers.includes(this.config.captchaSolver)) {
-            this.log(`Warning: Invalid CAPTCHA solver '${this.config.captchaSolver}'. Defaulting to 'buster'`);
-            this.config.captchaSolver = 'buster';
-        }
+    // Configuration Management
+    initializeConfig(options) {
+        const defaults = {
+            productUrl: 'https://brightlaunch.gumroad.com/l/livetraining',
+            actionDelay: 3000,
+            headless: true,
+            timeout: 45000,
+            captchaSolver: 'buster',
+            busterExtensionPath: './buster-extension',
+            nocaptchaExtensionPath: './nocaptcha-extension',
+            nocaptchaApiKey: null,
+            nocaptchaSettings: {
+                autoSolve: true,
+                maxWaitTime: 120000,
+                retryAttempts: 3,
+            },
+            logFile: 'logs/signup_log.txt',
+            successFile: 'logs/successful_signups.txt',
+            failedFile: 'logs/failed_signups.txt'
+        };
 
-        if (this.config.captchaSolver === 'nocaptcha') {
-            if (!this.config.nocaptchaApiKey) {
-                this.log('Warning: NoCaptcha AI requires an API key. Please provide nocaptchaApiKey in options.');
-                this.log('Falling back to manual CAPTCHA solving.');
-                this.config.captchaSolver = 'manual';
-            } else {
-                this.log('NoCaptcha AI configured with API key');
+        return {
+            ...defaults,
+            ...options,
+            nocaptchaSettings: {
+                ...defaults.nocaptchaSettings,
+                ...(options.nocaptchaSettings || {})
             }
-        }
-
-        if (this.config.captchaSolver !== 'manual') {
-            const extensionPath = this.config.captchaSolver === 'buster'
-                ? this.config.busterExtensionPath
-                : this.config.nocaptchaExtensionPath;
-
-            if (!fs.existsSync(extensionPath)) {
-                this.log(`Warning: ${this.config.captchaSolver} extension not found at ${extensionPath}`);
-                this.log('Falling back to manual CAPTCHA solving.');
-                this.config.captchaSolver = 'manual';
-            } else {
-                this.log(`Using ${this.config.captchaSolver} CAPTCHA solver from: ${extensionPath}`);
-            }
-        }
+        };
     }
 
-    // Initialize logging system
+    // Logging System
     initializeLogging() {
-        const logDir = path.dirname(this.config.logFile);
-        if (!fs.existsSync(logDir)) {
-            fs.mkdirSync(logDir, { recursive: true });
-        }
+        const createLogFile = (filePath, header) => {
+            const logDir = path.dirname(filePath);
+            if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+            fs.writeFileSync(filePath, header);
+        };
 
         const timestamp = new Date().toISOString();
         const header = `=== Gumroad Bulk Signup - ${timestamp} ===\n`;
 
-        fs.writeFileSync(this.config.logFile, header);
-        fs.writeFileSync(this.config.successFile, header);
-        fs.writeFileSync(this.config.failedFile, header);
+        createLogFile(this.config.logFile, header);
+        createLogFile(this.config.successFile, header);
+        createLogFile(this.config.failedFile, header);
     }
 
-    // Logging methods
     log(message) {
         const timestamp = new Date().toLocaleString();
         const logMessage = `[${timestamp}] ${message}`;
@@ -102,165 +76,160 @@ class GumroadBulkSignup {
         fs.appendFileSync(this.config.failedFile, `${email} - ${error}\n`);
     }
 
-    // NoCaptcha configuration methods
-    async configureNoCaptchaExtension() {
-        if (this.config.captchaSolver !== 'nocaptcha' || !this.config.nocaptchaApiKey) {
-            return;
+    // CAPTCHA Solver Configuration
+    validateCaptchaSolver() {
+        const { captchaSolver, nocaptchaApiKey } = this.config;
+        const validSolvers = ['buster', 'nocaptcha', 'manual'];
+
+        if (!validSolvers.includes(captchaSolver)) {
+            this.log(`Warning: Invalid CAPTCHA solver '${captchaSolver}'. Defaulting to 'buster'`);
+            this.config.captchaSolver = 'buster';
         }
 
-        const configPath = path.join(this.config.nocaptchaExtensionPath, 'defaultConfig.json');
+        if (captchaSolver === 'nocaptcha' && !nocaptchaApiKey) {
+            this.log('Warning: NoCaptcha AI requires an API key. Falling back to manual CAPTCHA solving.');
+            this.config.captchaSolver = 'manual';
+        }
 
+        if (captchaSolver !== 'manual') {
+            this.validateCaptchaExtension();
+        }
+    }
+
+    validateCaptchaExtension() {
+        const { captchaSolver, busterExtensionPath, nocaptchaExtensionPath } = this.config;
+        const extensionPath = captchaSolver === 'buster' ? busterExtensionPath : nocaptchaExtensionPath;
+
+        if (!fs.existsSync(extensionPath)) {
+            this.log(`Warning: ${captchaSolver} extension not found at ${extensionPath}. Falling back to manual.`);
+            this.config.captchaSolver = 'manual';
+        } else {
+            this.log(`Using ${captchaSolver} CAPTCHA solver from: ${extensionPath}`);
+        }
+    }
+
+    // NoCaptcha Extension Management
+    async configureNoCaptchaExtension() {
+        if (this.config.captchaSolver !== 'nocaptcha') return;
+
+        const configPath = path.join(this.config.nocaptchaExtensionPath, 'defaultConfig.json');
         try {
             this.log('Configuring NoCaptcha AI extension...');
 
-            // Check if config file exists
             if (!fs.existsSync(configPath)) {
                 this.log(`Warning: NoCaptcha config file not found at ${configPath}`);
                 return;
             }
 
-            // Read existing config
-            const configContent = fs.readFileSync(configPath, 'utf8');
-            const config = JSON.parse(configContent);
-
-            // Backup original config
-            const backupPath = configPath + '.backup';
-            if (!fs.existsSync(backupPath)) {
-                fs.writeFileSync(backupPath, configContent);
-                this.log('Created backup of original config');
-            }
-
-            // Update API key
-            config.APIKEY = this.config.nocaptchaApiKey;
-
-            // Ensure extension is enabled
-            config.enabled = true;
-            config.extensionEnabled = "true";
-
-            // Ensure ReCaptcha is configured properly
-            if (config.options && config.options.ReCaptcha) {
-                config.options.ReCaptcha.active = true;
-                config.options.ReCaptcha.autoSolve = true;
-                config.options.ReCaptcha.alwaysSolve = true;
-                config.options.ReCaptcha.support = true;
-            }
-
-            // Write updated config
+            const config = this.updateNoCaptchaConfig(configPath);
             fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
             this.log('NoCaptcha AI extension configured successfully');
-            this.log(`API key set: ${this.config.nocaptchaApiKey.substring(0, 8)}...`);
-
         } catch (error) {
             this.log(`Error configuring NoCaptcha extension: ${error.message}`);
             throw error;
         }
     }
 
-    async restoreNoCaptchaConfig() {
-        if (this.config.captchaSolver !== 'nocaptcha') {
-            return;
-        }
+    updateNoCaptchaConfig(configPath) {
+        const configContent = fs.readFileSync(configPath, 'utf8');
+        const config = JSON.parse(configContent);
 
-        const configPath = path.join(this.config.nocaptchaExtensionPath, 'defaultConfig.json');
+        // Backup original config
         const backupPath = configPath + '.backup';
+        if (!fs.existsSync(backupPath)) fs.writeFileSync(backupPath, configContent);
 
-        try {
-            if (fs.existsSync(backupPath)) {
-                const backupContent = fs.readFileSync(backupPath, 'utf8');
-                fs.writeFileSync(configPath, backupContent);
-                this.log('Restored original NoCaptcha config');
+        // Update config
+        return {
+            ...config,
+            APIKEY: this.config.nocaptchaApiKey,
+            enabled: true,
+            extensionEnabled: "true",
+            options: {
+                ...(config.options || {}),
+                ReCaptcha: {
+                    active: true,
+                    autoSolve: true,
+                    alwaysSolve: true,
+                    support: true,
+                    ...(config.options?.ReCaptcha || {})
+                }
             }
-        } catch (error) {
-            this.log(`Warning: Could not restore original config: ${error.message}`);
-        }
+        };
     }
 
-    // Email reading methods
+    // Email Processing
     readEmailsFromFile(filePath) {
         try {
-            if (filePath.endsWith('.csv')) {
-                return this.readEmailsFromCSV(filePath);
-            }
-
-            const workbook = xlsx.readFile(filePath);
-            const sheetName = workbook.SheetNames[0];
-            const worksheet = workbook.Sheets[sheetName];
-            const data = xlsx.utils.sheet_to_json(worksheet);
-
-            const emailColumn = this.findEmailColumn(data);
-            const emails = data
-                .map(row => row[emailColumn])
-                .filter(email => email && email.includes('@'));
-
-            this.log(`Found ${emails.length} valid emails in ${filePath}`);
-            return emails;
+            return filePath.endsWith('.csv')
+                ? this.readEmailsFromCSV(filePath)
+                : this.readEmailsFromExcel(filePath);
         } catch (error) {
             this.log(`Error reading file ${filePath}: ${error.message}`);
             return [];
         }
     }
 
+    readEmailsFromExcel(filePath) {
+        const workbook = xlsx.readFile(filePath);
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const data = xlsx.utils.sheet_to_json(worksheet);
+
+        const emailColumn = this.findEmailColumn(data);
+        const emails = data
+            .map(row => row[emailColumn])
+            .filter(email => email?.includes('@'));
+
+        this.log(`Found ${emails.length} valid emails in ${filePath}`);
+        return emails;
+    }
+
     readEmailsFromCSV(filePath) {
-        try {
-            const content = fs.readFileSync(filePath, 'utf8');
-            const lines = content.split('\n').filter(line => line.trim());
-            const emails = [];
+        const content = fs.readFileSync(filePath, 'utf8');
+        const emails = content
+            .split('\n')
+            .filter(line => line.trim())
+            .flatMap(line =>
+                line.split(',')
+                    .map(part => part.trim().replace(/['"]/g, ''))
+                    .find(part => part.includes('@')) || []
+            )
+            .filter(Boolean);
 
-            for (const line of lines) {
-                const parts = line.split(',');
-                for (const part of parts) {
-                    const trimmed = part.trim().replace(/['"]/g, '');
-                    if (trimmed.includes('@')) {
-                        emails.push(trimmed);
-                        break;
-                    }
-                }
-            }
-
-            this.log(`Found ${emails.length} valid emails in CSV ${filePath}`);
-            return emails;
-        } catch (error) {
-            this.log(`Error reading CSV ${filePath}: ${error.message}`);
-            return [];
-        }
+        this.log(`Found ${emails.length} valid emails in CSV ${filePath}`);
+        return emails;
     }
 
     findEmailColumn(data) {
         if (!data.length) return null;
 
         const emailColumns = ['email', 'Email', 'EMAIL', 'emails', 'Emails', 'EMAILS'];
+        const foundColumn = emailColumns.find(col => data[0].hasOwnProperty(col));
 
-        for (const col of emailColumns) {
-            if (data[0].hasOwnProperty(col)) {
-                return col;
-            }
+        if (!foundColumn) {
+            const firstColumn = Object.keys(data[0])[0];
+            this.log(`Warning: No standard email column found. Using: ${firstColumn}`);
+            return firstColumn;
         }
 
-        const firstColumn = Object.keys(data[0])[0];
-        this.log(`Warning: No standard email column found. Using: ${firstColumn}`);
-        return firstColumn;
+        return foundColumn;
     }
 
-    // Utility methods
-    async sleep(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
-    }
-
-    async waitForElement(page, selector, timeout = this.config.timeout) {
-        try {
-            await page.waitForSelector(selector, { timeout, visible: true });
-            return true;
-        } catch {
-            return false;
-        }
-    }
-
-    // Browser setup
+    // Browser Management
     async createBrowser() {
-        // Configure NoCaptcha extension before launching browser
         await this.configureNoCaptchaExtension();
 
-        const args = [
+        const browser = await puppeteer.launch({
+            headless: this.config.headless,
+            args: this.getBrowserArgs(),
+            defaultViewport: { width: 1366, height: 768 }
+        });
+
+        return browser;
+    }
+
+    getBrowserArgs() {
+        const baseArgs = [
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
@@ -276,34 +245,28 @@ class GumroadBulkSignup {
             '--allow-running-insecure-content'
         ];
 
-        // Add appropriate CAPTCHA solver extension
         if (this.config.captchaSolver !== 'manual') {
-            const extensionPath = this.config.captchaSolver === 'buster'
-                ? this.config.busterExtensionPath
-                : this.config.nocaptchaExtensionPath;
+            const extensionPath = path.resolve(
+                this.config.captchaSolver === 'buster'
+                    ? this.config.busterExtensionPath
+                    : this.config.nocaptchaExtensionPath
+            );
 
             if (fs.existsSync(extensionPath)) {
-                const resolvedPath = path.resolve(extensionPath);
-                args.push(`--disable-extensions-except=${resolvedPath}`);
-                args.push(`--load-extension=${resolvedPath}`);
-                this.log(`${this.config.captchaSolver} extension loaded from: ${resolvedPath}`);
+                baseArgs.push(
+                    `--disable-extensions-except=${extensionPath}`,
+                    `--load-extension=${extensionPath}`
+                );
             }
         }
 
-        const browser = await puppeteer.launch({
-            headless: this.config.headless,
-            args,
-            defaultViewport: { width: 1366, height: 768 }
-        });
-
-        return browser;
+        return baseArgs;
     }
 
     async setupPage(page) {
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
         await page.setViewport({ width: 1366, height: 768 });
 
-        // Remove webdriver detection
         await page.evaluateOnNewDocument(() => {
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined,
@@ -311,20 +274,13 @@ class GumroadBulkSignup {
         });
     }
 
-    // CAPTCHA handling
+    // CAPTCHA Handling
     async handleRecaptcha(page) {
         try {
             this.log('Checking for reCAPTCHA...');
             await this.sleep(2000);
 
-            const recaptchaSelectors = [
-                'iframe[src*="recaptcha"]',
-                'iframe[name^="a-"][src^="https://www.google.com/recaptcha"]',
-                '.g-recaptcha',
-                '.rc-anchor'
-            ];
-
-            const recaptchaFound = await this.detectRecaptcha(page, recaptchaSelectors);
+            const recaptchaFound = await this.detectRecaptcha(page);
             if (!recaptchaFound) {
                 this.log('No reCAPTCHA detected');
                 return true;
@@ -342,28 +298,31 @@ class GumroadBulkSignup {
         }
     }
 
-    async detectRecaptcha(page, selectors) {
-        for (const selector of selectors) {
-            try {
-                const element = await page.$(selector);
-                if (element) {
-                    const isVisible = await element.evaluate(el => {
-                        const style = window.getComputedStyle(el);
-                        return style.display !== 'none' &&
-                            style.visibility !== 'hidden' &&
-                            el.offsetHeight > 0;
-                    });
+    async detectRecaptcha(page) {
+        const recaptchaSelectors = [
+            'iframe[src*="recaptcha"]',
+            'iframe[name^="a-"][src^="https://www.google.com/recaptcha"]',
+            '.g-recaptcha',
+            '.rc-anchor'
+        ];
 
-                    if (isVisible) {
-                        this.log(`reCAPTCHA detected with selector: ${selector}`);
-                        return true;
-                    }
-                }
-            } catch {
-                continue;
+        for (const selector of recaptchaSelectors) {
+            const element = await page.$(selector);
+            if (element && await this.isElementVisible(element)) {
+                this.log(`reCAPTCHA detected with selector: ${selector}`);
+                return true;
             }
         }
         return false;
+    }
+
+    async isElementVisible(element) {
+        return element.evaluate(el => {
+            const style = window.getComputedStyle(el);
+            return style.display !== 'none' &&
+                style.visibility !== 'hidden' &&
+                el.offsetHeight > 0;
+        });
     }
 
     async solveRecaptcha(page) {
@@ -371,61 +330,51 @@ class GumroadBulkSignup {
         await this.sleep(3000);
 
         const frames = await page.frames();
-        const recaptchaFrame = frames.find(frame => {
-            const url = frame.url();
-            return url.includes('recaptcha') && (url.includes('anchor') || url.includes('checkbox'));
-        });
+        const recaptchaFrame = frames.find(frame =>
+            frame.url().includes('recaptcha') &&
+            (frame.url().includes('anchor') || frame.url().includes('checkbox'))
+        );
 
-        if (!recaptchaFrame) {
-            throw new Error('Could not find reCAPTCHA frame');
-        }
+        if (!recaptchaFrame) throw new Error('Could not find reCAPTCHA frame');
 
-        // Click checkbox
-        const checkboxClicked = await this.clickRecaptchaCheckbox(recaptchaFrame);
-        if (!checkboxClicked) {
-            throw new Error('Could not click reCAPTCHA checkbox');
-        }
-
+        await this.clickRecaptchaCheckbox(recaptchaFrame);
         await this.sleep(5000);
 
-        // Check if verified
-        const isVerified = await this.checkRecaptchaVerified(recaptchaFrame);
-        if (isVerified) {
+        if (await this.isRecaptchaVerified(recaptchaFrame)) {
             this.log('reCAPTCHA verified automatically');
             return true;
         }
 
-        // Handle challenge if present
-        const challengeFrame = frames.find(frame => {
-            const url = frame.url();
-            return url.includes('recaptcha') && (url.includes('bframe') || url.includes('challenge'));
-        });
+        return this.handleRecaptchaChallenge(page, recaptchaFrame);
+    }
 
-        if (challengeFrame) {
-            this.log(`Challenge detected, attempting to solve with ${this.config.captchaSolver}...`);
+    async handleRecaptchaChallenge(page, recaptchaFrame) {
+        const challengeFrame = (await page.frames()).find(frame =>
+            frame.url().includes('recaptcha') &&
+            (frame.url().includes('bframe') || frame.url().includes('challenge'))
+        );
 
-            let solved = false;
-            switch (this.config.captchaSolver) {
-                case 'buster':
-                    solved = await this.solveCaptchaWithBuster(challengeFrame);
-                    break;
-                case 'nocaptcha':
-                    solved = await this.solveCaptchaWithNoCaptcha(challengeFrame, page);
-                    break;
-                case 'manual':
-                    this.log('Manual solving required. Please solve the CAPTCHA manually.');
-                    await this.sleep(60000); // Wait 60 seconds for manual solving
-                    solved = true;
-                    break;
+        if (!challengeFrame) return true;
+
+        this.log(`Challenge detected, attempting to solve with ${this.config.captchaSolver}...`);
+
+        const solverMap = {
+            buster: () => this.solveCaptchaWithBuster(challengeFrame),
+            nocaptcha: () => this.solveCaptchaWithNoCaptcha(challengeFrame, page),
+            manual: async () => {
+                this.log('Manual solving required. Please solve the CAPTCHA manually.');
+                await this.sleep(60000);
+                return true;
             }
+        };
 
-            if (solved) {
-                await this.sleep(3000);
-                return await this.checkRecaptchaVerified(recaptchaFrame);
-            }
+        const solved = await solverMap[this.config.captchaSolver]();
+        if (solved) {
+            await this.sleep(3000);
+            return await this.isRecaptchaVerified(recaptchaFrame);
         }
 
-        return true;
+        return false;
     }
 
     async clickRecaptchaCheckbox(frame) {
@@ -449,7 +398,7 @@ class GumroadBulkSignup {
         return false;
     }
 
-    async checkRecaptchaVerified(frame) {
+    async isRecaptchaVerified(frame) {
         const verificationSelectors = [
             '.recaptcha-checkbox-checked',
             '.rc-anchor-checkbox-checked',
@@ -457,32 +406,24 @@ class GumroadBulkSignup {
         ];
 
         for (const selector of verificationSelectors) {
-            try {
-                const element = await frame.$(selector);
-                if (element) {
-                    this.log('reCAPTCHA verification confirmed');
-                    return true;
-                }
-            } catch {
-                continue;
+            if (await frame.$(selector)) {
+                this.log('reCAPTCHA verification confirmed');
+                return true;
             }
         }
         return false;
     }
 
-    // Buster CAPTCHA solver
+    // CAPTCHA Solvers
     async solveCaptchaWithBuster(challengeFrame) {
         try {
-            this.log('Waiting for Buster extension...');
             await challengeFrame.waitForSelector('.rc-footer', { timeout: 15000 });
-
-            // Wait for Buster to inject solver button
             const solverButton = await this.waitForBusterButton(challengeFrame);
 
             if (solverButton) {
                 await solverButton.click();
                 this.log('Clicked Buster button');
-                await this.sleep(25000); // Wait for Buster to solve
+                await this.sleep(25000);
                 return await this.verifyChallengeSolution(challengeFrame);
             }
 
@@ -496,22 +437,11 @@ class GumroadBulkSignup {
     async waitForBusterButton(challengeFrame, maxAttempts = 10) {
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             await this.sleep(5000);
+            const solverButton = await challengeFrame.$('#solver-button');
 
-            try {
-                const solverButton = await challengeFrame.$('#solver-button');
-                if (solverButton) {
-                    const isVisible = await solverButton.evaluate(el => {
-                        const style = window.getComputedStyle(el);
-                        return style.display !== 'none' && el.offsetHeight > 0;
-                    });
-
-                    if (isVisible) {
-                        this.log(`Solver button found after ${attempt} attempts`);
-                        return solverButton;
-                    }
-                }
-            } catch {
-                // Continue waiting
+            if (solverButton && await this.isElementVisible(solverButton)) {
+                this.log(`Solver button found after ${attempt} attempts`);
+                return solverButton;
             }
 
             this.log(`Attempt ${attempt}/${maxAttempts}: Waiting for solver button...`);
@@ -521,27 +451,18 @@ class GumroadBulkSignup {
         return null;
     }
 
-    // Simplified NoCaptcha AI solver
     async solveCaptchaWithNoCaptcha(challengeFrame, page) {
         try {
             this.log('NoCaptcha AI should auto-solve the challenge...');
 
-            // Since we configured the extension to auto-solve, just wait for it to work
-            const maxWaitTime = this.config.nocaptchaSettings.maxWaitTime;
+            const { maxWaitTime, retryAttempts } = this.config.nocaptchaSettings;
             const startTime = Date.now();
-            let attempts = 0;
-            const maxAttempts = this.config.nocaptchaSettings.retryAttempts;
 
-            while (attempts < maxAttempts && (Date.now() - startTime) < maxWaitTime) {
-                attempts++;
-                this.log(`Waiting for NoCaptcha AI to solve... (${attempts}/${maxAttempts})`);
-
-                // Wait for some time before checking
+            for (let attempt = 1; attempt <= retryAttempts && (Date.now() - startTime) < maxWaitTime; attempt++) {
+                this.log(`Waiting for NoCaptcha AI to solve... (${attempt}/${retryAttempts})`);
                 await this.sleep(10000);
 
-                // Check if solved
-                const isSolved = await this.checkNoCaptchaSolved(challengeFrame, page);
-                if (isSolved) {
+                if (await this.isNoCaptchaSolved(challengeFrame, page)) {
                     this.log('NoCaptcha AI successfully solved the challenge');
                     return await this.verifyChallengeSolution(challengeFrame);
                 }
@@ -549,55 +470,38 @@ class GumroadBulkSignup {
 
             this.log('NoCaptcha AI solving timed out');
             return false;
-
         } catch (error) {
             this.log(`NoCaptcha AI solving error: ${error.message}`);
             return false;
         }
     }
 
-    async checkNoCaptchaSolved(challengeFrame, page) {
-        try {
-            // Check if challenge frame is gone (solved)
-            const challengeFrames = await page.frames();
-            const activeChallenge = challengeFrames.find(frame => {
-                const url = frame.url();
-                return url.includes('recaptcha') && url.includes('bframe');
-            });
+    async isNoCaptchaSolved(challengeFrame, page) {
+        const challengeFrames = await page.frames();
+        const hasActiveChallenge = challengeFrames.some(frame =>
+            frame.url().includes('recaptcha') && frame.url().includes('bframe')
+        );
 
-            if (!activeChallenge) {
-                return true;
-            }
+        if (!hasActiveChallenge) return true;
 
-            // Check for solved indicators in the challenge frame
-            const solvedIndicators = [
-                '.rc-anchor-checkbox-checked',
-                '[aria-checked="true"]',
-                '.recaptcha-checkbox-checked'
-            ];
+        const solvedIndicators = [
+            '.rc-anchor-checkbox-checked',
+            '[aria-checked="true"]',
+            '.recaptcha-checkbox-checked'
+        ];
 
-            for (const selector of solvedIndicators) {
-                try {
-                    const element = await challengeFrame.$(selector);
-                    if (element) {
-                        return true;
-                    }
-                } catch {
-                    continue;
-                }
-            }
-
-            return false;
-        } catch (error) {
-            return false;
+        for (const selector of solvedIndicators) {
+            if (await challengeFrame.$(selector)) return true;
         }
+
+        return false;
     }
 
     async verifyChallengeSolution(challengeFrame) {
         try {
             await this.sleep(3000);
-
             const verifyButton = await challengeFrame.$('#recaptcha-verify-button');
+
             if (verifyButton) {
                 const buttonText = await verifyButton.evaluate(el => el.textContent?.trim());
                 const isEnabled = await verifyButton.evaluate(el => !el.disabled);
@@ -606,7 +510,6 @@ class GumroadBulkSignup {
                     await verifyButton.click();
                     this.log('Clicked verify button');
                     await this.sleep(3000);
-                    return true;
                 }
             }
             return true;
@@ -616,27 +519,20 @@ class GumroadBulkSignup {
         }
     }
 
-    // Form handling methods
+    // Form Handling
     async fillProductForm(page, email) {
-        // Enter price (0)
         await this.setPrice(page, '0');
         await this.sleep(1000);
 
-        // Click "I want this!" button
-        const iwantThisClicked = await this.clickIWantThisButton(page);
-        if (!iwantThisClicked) {
+        if (!await this.clickIWantThisButton(page)) {
             throw new Error('Could not find "I want this!" button');
         }
 
-        // Wait for checkout page
         this.log('Waiting for checkout page...');
         await this.sleep(5000);
 
-        // Fill email
         await this.fillEmail(page, email);
         await this.sleep(2000);
-
-        // Set tip to 0
         await this.setTip(page, '0');
     }
 
@@ -653,26 +549,17 @@ class GumroadBulkSignup {
     }
 
     async clickIWantThisButton(page) {
-        const buttonSelectors = [
-            'a[href*="checkout"]',
-            '.accent.button'
-        ];
+        const buttonSelectors = ['a[href*="checkout"]', '.accent.button'];
 
         for (const selector of buttonSelectors) {
-            try {
-                const elements = await page.$$(selector);
-                for (const element of elements) {
-                    const text = await element.evaluate(el => el.textContent);
-                    const isVisible = await element.isIntersectingViewport();
-
-                    if (isVisible && text.includes('I want this')) {
-                        await element.click();
-                        this.log('Clicked "I want this!" button');
-                        return true;
-                    }
+            const elements = await page.$$(selector);
+            for (const element of elements) {
+                const text = await element.evaluate(el => el.textContent);
+                if (await element.isIntersectingViewport() && text.includes('I want this')) {
+                    await element.click();
+                    this.log('Clicked "I want this!" button');
+                    return true;
                 }
-            } catch {
-                continue;
             }
         }
         return false;
@@ -686,17 +573,13 @@ class GumroadBulkSignup {
         ];
 
         for (const selector of emailSelectors) {
-            try {
-                if (await this.waitForElement(page, selector, 10000)) {
-                    const emailInput = await page.$(selector);
-                    await emailInput.focus();
-                    await emailInput.click({ clickCount: 3 });
-                    await emailInput.type(email);
-                    this.log('Email entered successfully');
-                    return true;
-                }
-            } catch {
-                continue;
+            if (await this.waitForElement(page, selector, 10000)) {
+                const emailInput = await page.$(selector);
+                await emailInput.focus();
+                await emailInput.click({ clickCount: 3 });
+                await emailInput.type(email);
+                this.log('Email entered successfully');
+                return true;
             }
         }
         throw new Error('Could not find email input field');
@@ -721,39 +604,29 @@ class GumroadBulkSignup {
             '.submit-button'
         ];
 
-        // Try specific buttons with text
+        // Try buttons with submit-like text first
         const buttons = await page.$$('button');
         for (const button of buttons) {
-            try {
-                const text = await button.evaluate(el => el.textContent);
-                const isVisible = await button.isIntersectingViewport();
-                const isEnabled = await button.evaluate(el => !el.disabled);
+            const text = await button.evaluate(el => el.textContent);
+            const isVisible = await button.isIntersectingViewport();
+            const isEnabled = await button.evaluate(el => !el.disabled);
 
-                if (isVisible && isEnabled && this.isSubmitButtonText(text)) {
-                    await button.click();
-                    this.log(`Form submitted using button: ${text.trim()}`);
-                    return true;
-                }
-            } catch {
-                continue;
+            if (isVisible && isEnabled && this.isSubmitButtonText(text)) {
+                await button.click();
+                this.log(`Form submitted using button: ${text.trim()}`);
+                return true;
             }
         }
 
-        // Try selector-based approach
+        // Fall back to selector-based approach
         for (const selector of submitSelectors) {
-            try {
-                if (await this.waitForElement(page, selector, 5000)) {
-                    const submitBtn = await page.$(selector);
-                    const isEnabled = await submitBtn.evaluate(el => !el.disabled);
-
-                    if (isEnabled) {
-                        await submitBtn.click();
-                        this.log(`Form submitted using: ${selector}`);
-                        return true;
-                    }
+            if (await this.waitForElement(page, selector, 5000)) {
+                const submitBtn = await page.$(selector);
+                if (await submitBtn.evaluate(el => !el.disabled)) {
+                    await submitBtn.click();
+                    this.log(`Form submitted using: ${selector}`);
+                    return true;
                 }
-            } catch {
-                continue;
             }
         }
 
@@ -762,35 +635,24 @@ class GumroadBulkSignup {
 
     isSubmitButtonText(text) {
         const submitTexts = ['get', 'complete', 'purchase', 'checkout', 'submit'];
-        return submitTexts.some(submitText =>
-            text.toLowerCase().includes(submitText)
-        );
+        return submitTexts.some(submitText => text.toLowerCase().includes(submitText));
     }
 
     async checkForSuccess(page) {
         const currentUrl = page.url();
         const pageContent = await page.evaluate(() => document.body.innerText.toLowerCase());
 
+        const errorIndicators = ['error', 'failed', 'invalid', 'try again', 'problem'];
+        if (errorIndicators.some(indicator => currentUrl.includes(indicator) || pageContent.includes(indicator))) {
+            this.log('Error detected in page content');
+            return false;
+        }
+
         const successIndicators = [
             'success', 'complete', 'thank', 'confirmation',
             'download', 'purchased', 'receipt', 'congratulations'
         ];
 
-        const errorIndicators = [
-            'error', 'failed', 'invalid', 'try again', 'problem'
-        ];
-
-        // Check for errors first
-        const hasError = errorIndicators.some(indicator =>
-            currentUrl.includes(indicator) || pageContent.includes(indicator)
-        );
-
-        if (hasError) {
-            this.log('Error detected in page content');
-            return false;
-        }
-
-        // Check for success
         const isSuccess = successIndicators.some(indicator =>
             currentUrl.includes(indicator) || pageContent.includes(indicator)
         );
@@ -799,59 +661,47 @@ class GumroadBulkSignup {
         return isSuccess;
     }
 
-    // Main signup method
+    // Core Signup Process
     async signupSingleEmail(page, email) {
         try {
             this.log(`Starting signup for: ${email}`);
 
-            // Navigate to product page
             await page.goto(this.config.productUrl, {
                 waitUntil: 'networkidle2',
                 timeout: this.config.timeout
             });
 
             await this.sleep(this.config.actionDelay);
-
-            // Fill form
             await this.fillProductForm(page, email);
-
-            // Submit form
             await this.sleep(2000);
-            const submitResult = await this.submitForm(page);
-            if (!submitResult) {
+
+            if (!await this.submitForm(page)) {
                 throw new Error('Could not submit form');
             }
 
-            // Handle any CAPTCHA
             await this.handleRecaptcha(page);
-
-            // Check for success
             await this.sleep(8000);
-            const success = await this.checkForSuccess(page);
 
-            if (success) {
+            if (await this.checkForSuccess(page)) {
                 this.logSuccess(email, `- Signup completed successfully using ${this.config.captchaSolver}`);
                 return true;
-            } else {
-                throw new Error('No success confirmation found');
             }
 
+            throw new Error('No success confirmation found');
         } catch (error) {
             this.logFailure(email, error.message);
             return false;
         }
     }
-    // Bulk signup method
-    async bulkSignup(emailSourcePath, options = {}) {
-        const batchSize = options.batchSize || 2;
-        const batchDelay = options.batchDelay || 20000;
 
+    async bulkSignup(emailSourcePath, options = {}) {
         const emails = this.readEmailsFromFile(emailSourcePath);
         if (emails.length === 0) {
             this.log('No emails found to process');
             return;
         }
 
+        const { batchSize = 2, batchDelay = 20000 } = options;
         this.log(`Starting bulk signup for ${emails.length} emails using ${this.config.captchaSolver} CAPTCHA solver`);
 
         const browser = await this.createBrowser();
@@ -863,21 +713,15 @@ class GumroadBulkSignup {
                 const batch = emails.slice(i, i + batchSize);
                 this.log(`Processing batch ${Math.floor(i / batchSize) + 1}: ${batch.length} emails`);
 
-                const promises = batch.map(async (email) => {
-                    const page = await browser.newPage();
-                    await this.setupPage(page);
+                const results = await Promise.allSettled(
+                    batch.map(email => this.processSingleEmail(browser, email))
+                );
 
-                    try {
-                        const result = await this.signupSingleEmail(page, email);
-                        if (result) successCount++;
-                        else failureCount++;
-                        return { email, success: result };
-                    } finally {
-                        await page.close();
-                    }
-                });
+                const batchSuccess = results.filter(r => r.value).length;
+                const batchFailure = results.length - batchSuccess;
 
-                await Promise.allSettled(promises);
+                successCount += batchSuccess;
+                failureCount += batchFailure;
 
                 this.log(`Batch completed. Totals: ${successCount} successful, ${failureCount} failed`);
 
@@ -888,19 +732,58 @@ class GumroadBulkSignup {
             }
 
             this.log(`Final results: ${successCount} successful, ${failureCount} failed out of ${emails.length} total`);
-
         } finally {
             await browser.close();
         }
     }
+
+    async processSingleEmail(browser, email) {
+        const page = await browser.newPage();
+        try {
+            await this.setupPage(page);
+            const result = await this.signupSingleEmail(page, email);
+            return result;
+        } finally {
+            await page.close();
+        }
+    }
+
+    // Utility Methods
+    async sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    async waitForElement(page, selector, timeout = this.config.timeout) {
+        try {
+            await page.waitForSelector(selector, { timeout, visible: true });
+            return true;
+        } catch {
+            return false;
+        }
+    }
 }
 
-// CLI interface
+// CLI Interface
 async function main() {
     const args = process.argv.slice(2);
+    if (args.length === 0) return showUsage();
 
-    if (args.length === 0) {
-        console.log(`
+    const emailFile = args[0];
+    if (!fs.existsSync(emailFile)) {
+        console.error(`Error: File ${emailFile} not found`);
+        return;
+    }
+
+    const options = parseCliOptions(args);
+    const signup = new GumroadBulkSignup(options);
+    await signup.bulkSignup(emailFile, {
+        batchSize: options.batchSize,
+        batchDelay: options.batchDelay
+    });
+}
+
+function showUsage() {
+    console.log(`
 Usage: node gumroad-bulk-signup.js <email-file> [options]
 
 Arguments:
@@ -921,38 +804,25 @@ Examples:
   node index.js emails.csv --captcha-solver nocaptcha
   node index.js emails.xlsx --captcha-solver buster --batch-size 1
   node index.js emails.xlsx --nocaptcha-path ./my-nocaptcha-extension
-        `);
-        return;
-    }
+    `);
+}
 
-    const emailFile = args[0];
-    if (!fs.existsSync(emailFile)) {
-        console.error(`Error: File ${emailFile} not found`);
-        return;
-    }
-
-    // Parse arguments
+function parseCliOptions(args) {
     const getArgValue = (argName) => {
         const index = args.indexOf(argName);
         return index !== -1 && args[index + 1] ? args[index + 1] : null;
     };
 
-    const options = {
+    return {
         headless: !args.includes('--no-headless'),
         delay: parseInt(getArgValue('--delay')) || 3000,
+        batchSize: parseInt(getArgValue('--batch-size')) || 2,
+        batchDelay: parseInt(getArgValue('--batch-delay')) || 20000,
         captchaSolver: getArgValue('--captcha-solver') || 'buster',
         busterExtensionPath: getArgValue('--buster-path') || './buster-extension',
         nocaptchaExtensionPath: getArgValue('--nocaptcha-path') || './nocaptcha-extension',
         nocaptchaApiKey: getArgValue('--nocaptcha-api-key')
     };
-
-    const bulkOptions = {
-        batchSize: parseInt(getArgValue('--batch-size')) || 2,
-        batchDelay: parseInt(getArgValue('--batch-delay')) || 20000
-    };
-
-    const signup = new GumroadBulkSignup(options);
-    await signup.bulkSignup(emailFile, bulkOptions);
 }
 
 module.exports = GumroadBulkSignup;
