@@ -11,6 +11,7 @@ failed_signups.txt
 
 # Sensitive data
 emails.xlsx
+emails-2.xlsx
 
 # System files
 .DS_Store

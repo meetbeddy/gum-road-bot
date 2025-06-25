@@ -312,27 +312,23 @@ class GumroadBulkSignup {
     }
 
     // CAPTCHA handling
-    async handleRecaptcha(page) {
+    async handleCaptcha(page) {
         try {
-            this.log('Checking for reCAPTCHA...');
-            await this.sleep(1000);
+            this.log('🔍 Scanning for active CAPTCHA...');
+            await this.sleep(2000);
 
-            const recaptchaSelectors = [
-                'iframe[src*="recaptcha"]',
-                'iframe[name^="a-"][src^="https://www.google.com/recaptcha"]',
-                '.g-recaptcha',
-                '.rc-anchor'
-            ];
-
-            const recaptchaFound = await this.detectRecaptcha(page, recaptchaSelectors);
-            if (!recaptchaFound) {
-                this.log('No reCAPTCHA detected');
+            const activeCaptcha = await this.detectVisibleCaptcha(page);
+            if (!activeCaptcha) {
+                this.log('✅ No visible CAPTCHA found');
                 return true;
             }
 
-            return await this.solveRecaptcha(page);
+            const { type, frame } = activeCaptcha;
+            this.log(`🎯 Active CAPTCHA detected: ${type}`);
+
+            return await this.solveCaptcha(type, frame, page);
         } catch (error) {
-            this.log(`reCAPTCHA handling failed: ${error.message}`);
+            this.log(`❌ CAPTCHA handling failed: ${error.message}`);
             if (this.config.captchaSolver === 'manual') {
                 this.log('Manual CAPTCHA solving required. Waiting 60 seconds...');
                 await this.sleep(60000);
@@ -342,77 +338,75 @@ class GumroadBulkSignup {
         }
     }
 
-    async detectRecaptcha(page, selectors) {
-        for (const selector of selectors) {
-            try {
-                const element = await page.$(selector);
-                if (element) {
-                    const isVisible = await element.evaluate(el => {
-                        const style = window.getComputedStyle(el);
-                        return style.display !== 'none' &&
-                            style.visibility !== 'hidden' &&
-                            el.offsetHeight > 0;
-                    });
 
-                    if (isVisible) {
-                        this.log(`reCAPTCHA detected with selector: ${selector}`);
-                        return true;
-                    }
-                }
-            } catch {
-                continue;
-            }
-        }
-        return false;
-    }
-
-    async solveRecaptcha(page) {
-        this.log(`reCAPTCHA found, attempting to solve with ${this.config.captchaSolver}...`);
-        await this.sleep(2000);
-
+    async detectVisibleCaptcha(page) {
         const frames = await page.frames();
-        const recaptchaFrame = frames.find(frame => {
-            const url = frame.url();
-            return url.includes('recaptcha') && (url.includes('anchor') || url.includes('checkbox'));
-        });
 
-        if (!recaptchaFrame) {
-            this.log('⚠️ reCAPTCHA checkbox frame not found – continuing process (possibly no CAPTCHA needed)');
-            return true;
-        }
-        await this.sleep(1000);
-        // Handle challenge if present
-        const challengeFrame = frames.find(frame => {
-            const url = frame.url();
-            return url.includes('recaptcha') && (url.includes('bframe') || url.includes('challenge'));
-        });
+        function getCaptchaType(url) {
+            const hostname = (new URL(url)).hostname;
 
-        if (challengeFrame) {
-            this.log(`Challenge detected, attempting to solve with ${this.config.captchaSolver}...`);
-
-            let solved = false;
-            switch (this.config.captchaSolver) {
-                case 'buster':
-                    solved = await this.solveCaptchaWithBuster(page);
-                    break;
-                case 'nocaptcha':
-                    solved = await this.solveCaptchaWithNoCaptcha(challengeFrame, page);
-                    break;
-                case 'manual':
-                    this.log('Manual solving required. Please solve the CAPTCHA manually.');
-                    await this.sleep(60000); // Wait 60 seconds for manual solving
-                    solved = true;
-                    break;
+            if (hostname.includes('hcaptcha.com')) {
+                if (url.includes('checkbox')) return 'hcaptcha-checkbox';
+                if (url.includes('challenge') || url.includes('frame')) return 'hcaptcha-challenge';
+                return 'hcaptcha';
             }
 
-            if (solved) {
-                await this.sleep(500);
-                return await this.checkRecaptchaVerified(recaptchaFrame);
+            if (hostname.includes('recaptcha.net') || hostname.includes('google.com')) {
+                if (url.includes('anchor') || url.includes('checkbox')) return 'recaptcha-checkbox';
+                if (url.includes('bframe') || url.includes('challenge')) return 'recaptcha-challenge';
+                return 'recaptcha';
+            }
+
+            if (hostname.includes('challenges.cloudflare.com') || url.includes('cdn-cgi/challenge-platform')) {
+                return 'turnstile';
+            }
+
+            return null;
+        }
+
+
+        for (const frame of frames) {
+            const url = frame.url();
+            const type = getCaptchaType(url);
+            if (!type) continue;
+
+            const visible = await frame.evaluate(() => {
+                const el = document.body;
+                const style = window.getComputedStyle(el);
+                return style.display !== 'none' && style.visibility !== 'hidden' && el.offsetHeight > 0;
+            }).catch(() => false);
+
+            if (visible) {
+                this.log(`[VISIBLE CAPTCHA DETECTED] Type: ${type} | URL: ${url}`);
+                return { type, frame };
             }
         }
 
-        return true;
+        return null;
     }
+
+    async solveCaptcha(type, frame, page) {
+        this.log(`🤖 Solving CAPTCHA of type: ${type} using ${this.config.captchaSolver}...`);
+
+        // Final solve
+        switch (this.config.captchaSolver) {
+            case 'buster':
+                return await this.solveCaptchaWithBuster(frame);
+
+            case 'nocaptcha':
+                return await this.solveCaptchaWithNoCaptcha(frame, page);
+
+            case 'manual':
+                this.log('Manual CAPTCHA solving required. Waiting 60 seconds...');
+                await this.sleep(60000);
+                return true;
+
+            default:
+                this.log(`⚠️ No solving strategy implemented for: ${type}`);
+                return false;
+        }
+    }
+
 
     async clickRecaptchaCheckbox(frame) {
         const checkboxSelectors = [
@@ -457,23 +451,12 @@ class GumroadBulkSignup {
     }
 
     // Buster CAPTCHA solver
-    async solveCaptchaWithBuster(page) {
+    async solveCaptchaWithBuster(challengeFrame) {
         try {
+            await this.saveChallengeFrameHTML(challengeFrame);
 
             this.log('Waiting for Buster extension...');
-            // 1. Wait for the bframe iframe to appear on the main page
-            const elementHandle = await page.waitForSelector('iframe[src*="bframe"]');
-
-            // 2. Get the frame from the element
-            const challengeFrame = await elementHandle.contentFrame();
-
-            if (!challengeFrame) {
-                throw new Error('Could not get challenge iframe');
-            }
-
-            // 3. Now we can wait for .rc-footer *inside* the frame
             await challengeFrame.waitForSelector('.rc-footer', { timeout: 15000 });
-
 
             // Wait for Buster to inject solver button
             const solverButton = await this.waitForBusterButton(challengeFrame);
@@ -481,7 +464,7 @@ class GumroadBulkSignup {
             if (solverButton) {
                 await solverButton.click();
                 this.log('Clicked Buster button');
-                await this.sleep(2000); // Wait for Buster to solve
+                await this.sleep(25000); // Wait for Buster to solve
                 return await this.verifyChallengeSolution(challengeFrame);
             }
 
@@ -492,96 +475,53 @@ class GumroadBulkSignup {
         }
     }
 
-    async waitForBusterButton(challengeFrame, maxAttempts = 15) {
+    async waitForBusterButton(challengeFrame, maxAttempts = 10) {
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-            await this.sleep(2000);
+            await this.sleep(5000);
 
             try {
-                // Wait for the footer to be loaded
-                await challengeFrame.waitForSelector('.rc-footer', { timeout: 5000 });
-
-                // Method 1: Try to access the shadow root directly
-                const busterButton = await challengeFrame.evaluate(() => {
-                    const helpButtonHolder = document.querySelector('.button-holder.help-button-holder');
-                    if (helpButtonHolder && helpButtonHolder.shadowRoot) {
-                        const solverButton = helpButtonHolder.shadowRoot.querySelector('#solver-button');
-                        if (solverButton) {
-                            return solverButton;
-                        }
-                    }
-                    return null;
-                });
-
-                if (busterButton) {
-                    this.log(`Buster button found in shadow root after ${attempt} attempts`);
-                    return busterButton;
-                }
-
-                // Method 2: Check if help-button-holder has been modified by Buster
-                const helpButtonHolder = await challengeFrame.$('.button-holder.help-button-holder');
-                if (helpButtonHolder) {
-                    // Check if the element has a shadow root or has been modified
-                    const isModified = await helpButtonHolder.evaluate(el => {
-                        // Check if shadow root exists
-                        if (el.shadowRoot) {
-                            return true;
-                        }
-
-                        // Check if the element has been modified (Buster sometimes adds content)
-                        const hasContent = el.innerHTML.trim().length > 0;
-                        const hasTabIndex = el.hasAttribute('tabindex');
-                        const hasTitle = el.title && el.title.toLowerCase().includes('solve');
-
-                        return hasContent || hasTabIndex || hasTitle;
-                    });
-
-                    if (isModified) {
-                        this.log(`Buster button detected in help-button-holder after ${attempt} attempts`);
-                        return helpButtonHolder;
-                    }
-                }
-
-                // Method 3: Fallback - look for any button with solver-related attributes
-                const fallbackButton = await challengeFrame.$('#solver-button, button[id*="solver"], button[title*="solve"]');
-                if (fallbackButton) {
-                    const isVisible = await fallbackButton.evaluate(el => {
-                        const rect = el.getBoundingClientRect();
-                        return rect.width > 0 && rect.height > 0;
+                const solverButton = await challengeFrame.$('#solver-button');
+                if (solverButton) {
+                    const isVisible = await solverButton.evaluate(el => {
+                        const style = window.getComputedStyle(el);
+                        return style.display !== 'none' && el.offsetHeight > 0;
                     });
 
                     if (isVisible) {
-                        this.log(`Buster button found via fallback method after ${attempt} attempts`);
-                        return fallbackButton;
+                        this.log(`Solver button found after ${attempt} attempts`);
+                        return solverButton;
                     }
                 }
-
-                this.log(`Attempt ${attempt}/${maxAttempts}: Buster button not found`);
-
-                // Debug logging every 5 attempts
-                if (attempt % 5 === 0) {
-                    try {
-                        const debugInfo = await challengeFrame.evaluate(() => {
-                            const helpHolder = document.querySelector('.button-holder.help-button-holder');
-                            return {
-                                helpHolderExists: !!helpHolder,
-                                helpHolderHTML: helpHolder ? helpHolder.outerHTML.substring(0, 200) : 'N/A',
-                                hasShadowRoot: helpHolder ? !!helpHolder.shadowRoot : false,
-                                tabIndex: helpHolder ? helpHolder.getAttribute('tabindex') : 'N/A'
-                            };
-                        });
-                        this.log(`Debug info (attempt ${attempt}):`, JSON.stringify(debugInfo, null, 2));
-                    } catch (debugError) {
-                        this.log(`Debug error: ${debugError.message}`);
-                    }
-                }
-
-            } catch (error) {
-                this.log(`Error in attempt ${attempt}: ${error.message}`);
+            } catch {
+                // Continue waiting
             }
+
+            this.log(`Attempt ${attempt}/${maxAttempts}: Waiting for solver button...`);
         }
 
-        this.log('Buster button not found after all attempts');
+        this.log('Solver button not found after waiting');
         return null;
+    }
+
+    async saveChallengeFrameHTML(challengeFrame) {
+        try {
+            const htmlContent = await challengeFrame.content();
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const filename = `challenge-frame-${timestamp}.html`;
+            const filepath = path.join(__dirname, 'captcha-frames', filename);
+
+            // Create directory if it doesn't exist (synchronous)
+            if (!fs.existsSync(path.dirname(filepath))) {
+                fs.mkdirSync(path.dirname(filepath), { recursive: true });
+            }
+
+            // Save HTML content to file (synchronous)
+            fs.writeFileSync(filepath, htmlContent, 'utf8');
+
+            this.log(`Challenge frame HTML saved to: ${filepath}`);
+        } catch (error) {
+            this.log(`Failed to save challenge frame HTML: ${error.message}`);
+        }
     }
 
     // Simplified NoCaptcha AI solver
@@ -668,7 +608,7 @@ class GumroadBulkSignup {
                 if (buttonText !== 'Skip' || isEnabled) {
                     await verifyButton.click();
                     this.log('Clicked verify button');
-                    await this.sleep(2000);
+                    await this.sleep(3000);
                     return true;
                 }
             }
@@ -886,10 +826,10 @@ class GumroadBulkSignup {
             }
 
             // Handle any CAPTCHA
-            await this.handleRecaptcha(page);
+            await this.handleCaptcha(page);
 
             // Check for success
-            await this.sleep(2000);
+            await this.sleep(8000);
             const success = await this.checkForSuccess(page);
 
             if (success) {
@@ -1013,7 +953,7 @@ Examples:
 
     const bulkOptions = {
         batchSize: parseInt(getArgValue('--batch-size')) || 2,
-        batchDelay: parseInt(getArgValue('--batch-delay')) || 5000
+        batchDelay: parseInt(getArgValue('--batch-delay')) || 20000
     };
 
     const signup = new GumroadBulkSignup(options);
