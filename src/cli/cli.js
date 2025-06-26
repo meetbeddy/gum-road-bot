@@ -33,8 +33,8 @@ function parseArgs() {
             productUrl: getArgValue('--product-url') || 'https://gumroad.com/l/your-product',
             delay: parseInt(getArgValue('--delay')) || 3000,
             captchaSolver: getArgValue('--captcha-solver') || 'buster',
-            busterExtensionPath: getArgValue('--buster-path') || './buster-extension',
-            nocaptchaExtensionPath: getArgValue('--nocaptcha-path') || './nocaptcha-extension',
+            busterExtensionPath: getArgValue('--buster-path') || './extensions/buster-extension',
+            nocaptchaExtensionPath: getArgValue('--nocaptcha-path') || './extensions/nocaptcha-extension',
             nocaptchaApiKey: getArgValue('--nocaptcha-api-key')
         },
         bulkOptions: {

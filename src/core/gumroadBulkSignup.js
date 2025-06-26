@@ -108,17 +108,22 @@ class GumroadBulkSignup {
             }
 
             // Handle any CAPTCHA
-            await this.captchaHandler.handleRecaptcha(page);
+            const solved = await this.captchaHandler.handleRecaptcha(page);
+
+
+            this.logger.log(`was captcha solving successful?: ${solved}`);
 
             // Check for success
             await this.sleep(2000);
             const success = await this.formHandler.checkForSuccess(page);
 
-            if (success) {
+            if (success && solved) {
                 this.logger.logSuccess(email, `- Signup completed successfully using ${this.config.captchaSolver}`);
                 return true;
             } else {
+                this.logger.logFailure(email, error.message);
                 throw new Error('No success confirmation found');
+
             }
         } catch (error) {
             this.logger.logFailure(email, error.message);

@@ -102,10 +102,13 @@ class CaptchaHandler {
                     break;
             }
 
-            if (solved) {
-                await this.sleep(500);
-                return await this.checkRecaptchaVerified(recaptchaFrame);
-            }
+            this.logger.log(`CAPTCHA SOLVED STATUS: ${solved}`);
+            return solved;
+
+            // if (solved) {
+            //     await this.sleep(500);
+            //     return await this.checkRecaptchaVerified(recaptchaFrame);
+            // }
         }
 
         return true;
