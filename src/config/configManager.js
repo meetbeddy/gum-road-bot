@@ -15,8 +15,8 @@ class ConfigManager {
             headless: true,
             timeout: 45000,
             captchaSolver: 'buster',
-            busterExtensionPath: './buster-extension',
-            nocaptchaExtensionPath: './nocaptcha-extension',
+            busterExtensionPath: './extensions/buster-extension',
+            nocaptchaExtensionPath: './extensions/nocaptcha-extension',
             nocaptchaApiKey: null,
             nocaptchaSettings: {
                 autoSolve: true,

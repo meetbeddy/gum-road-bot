@@ -1,5 +1,6 @@
 
 const fs = require('fs');
+const path = require('path');
 const GumroadBulkSignup = require('../core/gumRoadBulkSignup');
 
 /**
@@ -15,13 +16,18 @@ function parseArgs() {
     }
 
     const emailFile = args[0];
-    if (!fs.existsSync(emailFile)) {
-        console.error(`Error: File ${emailFile} not found`);
-        process.exit(1);
+    let resolvedPath = path.resolve(process.cwd(), emailFile);
+    if (!fs.existsSync(resolvedPath)) {
+        const fallback = path.resolve(process.cwd(), 'email-lists', emailFile);
+        if (fs.existsSync(fallback)) {
+            resolvedPath = fallback;
+        } else {
+            console.error(`❌ Error: File "${emailFile}" not found in current or "email/" directory.`);
+            process.exit(1);
+        }
     }
-
     return {
-        emailFile,
+        emailFile: resolvedPath,
         options: {
             headless: !args.includes('--no-headless'),
             productUrl: getArgValue('--product-url') || 'https://gumroad.com/l/your-product',
@@ -47,7 +53,8 @@ function parseArgs() {
 Usage: node gumroad-bulk-signup.js <email-file> [options]
 
 Arguments:
-  email-file              Path to Excel (.xlsx) or CSV file containing emails
+  email-file              Name of the email file (e.g., emails.xlsx). 
+                          File will be searched in current directory or 'email/' folder.
 
 Options:
   --headless             Run in headless mode (default: true)
@@ -61,11 +68,11 @@ Options:
   --nocaptcha-api-key <key> API key for NoCaptcha AI solver
 
 Examples:
-  node index.js emails.xlsx
-  node index.js emails.csv --captcha-solver nocaptcha
-  node index.js emails.xlsx --captcha-solver buster --batch-size 1
-  node index.js emails.xlsx --nocaptcha-path ./my-nocaptcha-extension --nocaptcha-api-key keyvalue123riiejd
-  node index.js emails.xlsx --no-headless --captcha-solver buster --product-url https://dwellsoft.gumroad.com/l/USPOTraining 
+  node src/cli/cli.js emails.xlsx
+  node src/cli/cli.js emails.csv --captcha-solver nocaptcha
+  node src/cli/cli.js emails.xlsx --captcha-solver buster --batch-size 1
+  node src/cli/cli.js emails.xlsx --nocaptcha-path ./my-nocaptcha-extension --nocaptcha-api-key keyvalue123riiejd
+  node src/cli/cli.js emails.xlsx --no-headless --captcha-solver buster --product-url https://dwellsoft.gumroad.com/l/USPOTraining 
         `);
     }
 }

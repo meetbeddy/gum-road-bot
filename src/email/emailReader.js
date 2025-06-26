@@ -19,7 +19,10 @@ class EmailReader {
      * @returns {string[]} Array of emails
      */
     readEmailsFromFile(filePath) {
-        const resolvedPath = path.resolve(process.cwd(), filePath);
+        const resolvedPath = fs.existsSync(filePath)
+            ? path.resolve(process.cwd(), filePath)
+            : path.resolve(process.cwd(), 'email-lists', filePath);
+
         this.logger.log(`Resolved email file path: ${resolvedPath}`);
         try {
             if (resolvedPath.endsWith('.csv')) {
